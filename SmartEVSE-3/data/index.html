@@ -55,7 +55,7 @@
       let ocppEditMode = false;
       let last_evse_state_id=0;
 
-      $(document).ready(loadData());
+      $(document).ready(loadData);
 
       // Function to toggle cert visibility
       function toggleCertVisibility() {
@@ -75,6 +75,7 @@
         $.ajax({
               url: endpoint
           }).then(function(data) {
+            var isFirstLoad = !initiated;
             if(!initiated) {
               initiated = true;
               // Set the text and the data-version attribute dynamically
@@ -217,6 +218,11 @@
             $('#current_min').text(data.settings.current_min.toFixed(1) + " A");
             $('#current_max').text(data.settings.current_max.toFixed(1) + " A");
             $('#override_current').text((data.settings.override_current/10).toFixed(1) + " A");
+            if (data.evse.loadbl < 2 && data.settings.override_current !== undefined) {
+              var ov = Math.round(Number(data.settings.override_current) / 10);
+              var $sel = $('#mode_override_current');
+              if ($sel.find('option[value="' + ov + '"]').length) { $sel.val(ov); try { $sel.selectmenu('refresh'); } catch (e) {} }
+            }
             $('#enable_C2').text(data.settings.enable_C2);
             if (data.settings.starttime) {
                 $('#starttime_date_time').text(new Date(data.settings.starttime * 1000).toLocaleDateString() + " " + new Date(data.settings.starttime * 1000).toLocaleTimeString());
@@ -294,6 +300,54 @@
             $('#solar_start_current').val(data.settings.solar_start_current);
             $('#solar_max_import_current').val(data.settings.solar_max_import);
             $('#solar_stop_time').val(data.settings.solar_stop_time);
+
+            // EVSE Configuration section (exposed LCD/menu settings)
+            if (data.settings.config !== undefined) $('#evse_config_config').val(String(data.settings.config));
+            if (data.settings.lock !== undefined) $('#evse_config_lock').val(String(data.settings.lock));
+            if (data.settings.current_max !== undefined) $('#evse_config_current_max').val(data.settings.current_max);
+            if (data.settings.current_max_circuit !== undefined) $('#evse_config_current_max_circuit').val(data.settings.current_max_circuit);
+            if (data.settings.current_main !== undefined) $('#evse_config_current_main').val(data.settings.current_main);
+            if (data.evse.loadbl !== undefined) $('#evse_config_loadbl').val(String(data.evse.loadbl));
+            if (data.settings.grid !== undefined) $('#evse_config_grid').val(String(data.settings.grid));
+            if (data.settings.sb2_wifi !== undefined) $('#evse_config_sb2_wifi').val(String(data.settings.sb2_wifi));
+            if (data.settings.mains_meter_type !== undefined) $('#evse_config_mains_meter_type').val(String(data.settings.mains_meter_type));
+            if (data.settings.mains_meter_address !== undefined) $('#evse_config_mains_meter_address').val(data.settings.mains_meter_address);
+            if (data.ev_meter && data.ev_meter.type !== undefined) $('#evse_config_ev_meter_type').val(String(data.ev_meter.type));
+            if (data.ev_meter && data.ev_meter.address !== undefined) $('#evse_config_ev_meter_address').val(data.ev_meter.address);
+            if (data.settings.switch !== undefined) $('#evse_config_switch').val(String(data.settings.switch));
+            if (data.settings.rcmon !== undefined) $('#evse_config_rcmon').prop('checked', data.settings.rcmon == 1).checkboxradio('refresh');
+            if (data.settings.rfidreader !== undefined) $('#evse_config_rfidreader').val(String(data.settings.rfidreader));
+            else if (data.evse.rfidreader !== undefined) {
+              const rfidMap = { "Disabled": 0, "EnableAll": 1, "EnableOne": 2, "Learn": 3, "Delete": 4, "DeleteAll": 5, "Rmt/OCPP": 6 };
+              $('#evse_config_rfidreader').val(String(rfidMap[data.evse.rfidreader] ?? 0));
+            }
+            if (data.settings.autoupdate !== undefined) $('#evse_config_autoupdate').prop('checked', data.settings.autoupdate == 1).checkboxradio('refresh');
+            if (data.evse.temp_max !== undefined) $('#evse_config_max_temp').val(data.evse.temp_max);
+            if (data.settings.lcd_pin !== undefined) $('#evse_config_lcd_pin').val(data.settings.lcd_pin === 0 ? '' : data.settings.lcd_pin);
+            if (data.settings.app_server !== undefined) $('#evse_config_app_server').prop('checked', data.settings.app_server == 1).checkboxradio('refresh');
+            if (data.evse.loadbl >= 2) $('#evse_config_master_only').find('select, input').prop('disabled', true);
+            else $('#evse_config_master_only').find('select, input').prop('disabled', false);
+            if (data.mqtt) $('#evse_config_app_server_row').show(); else $('#evse_config_app_server_row').hide();
+            if (data.meter_types && Array.isArray(data.meter_types)) {
+              var $mains = $('#evse_config_mains_meter_type'), $ev = $('#evse_config_ev_meter_type');
+              $mains.find('option:not(:first)').remove();
+              $ev.find('option:not(:first)').remove();
+              data.meter_types.forEach(function(name, i) {
+                if (i === 0) return;
+                $mains.append($('<option>', { value: i, text: name }));
+                $ev.append($('<option>', { value: i, text: name }));
+              });
+              if (data.settings.mains_meter_type !== undefined) $mains.val(String(data.settings.mains_meter_type));
+              if (data.ev_meter && data.ev_meter.type !== undefined) $ev.val(String(data.ev_meter.type));
+            }
+            // Refresh jQuery Mobile selectmenu so closed state shows the actual selected value
+            $('#evse_config_section select').each(function() {
+              try { $(this).selectmenu('refresh'); } catch (e) {}
+            });
+            // Refresh jQuery Mobile textinput on number inputs so displayed value matches actual state
+            $('#evse_config_section input[type="number"], #solar_start_current, #solar_max_import_current, #solar_stop_time').each(function() {
+              try { $(this).textinput('refresh'); } catch (e) {}
+            });
 
             if(data.settings.modem == "Experiment" || data.settings.modem == "QCA7000") {
               $('.with_modem').show();
@@ -374,6 +428,9 @@
             } else {
               $('[id=ocpp_config_outer]').hide();
             }
+
+            // After first load, re-run once so jQuery Mobile–enhanced widgets (selectmenu, checkboxradio, textinput) show correct values
+            if (isFirstLoad) setTimeout(loadData, 400);
 
             setTimeout("loadData()", 5000);
           });
@@ -1372,6 +1429,41 @@
                       var CableLockCheckbox = document.getElementById("cablelock");
                       $.post( "/settings?cablelock=" + (CableLockCheckbox.checked == true ? 1 : 0));
                     }
+                    function saveEvseConfig() {
+                      var params = [];
+                      var add = function(name, id, isCheckbox) {
+                        var el = document.getElementById(id);
+                        if (!el || el.disabled) return;
+                        if (isCheckbox) {
+                          params.push(name + "=" + (el.checked ? 1 : 0));
+                        } else {
+                          var val = el.value;
+                          if (val !== '' && val !== undefined) params.push(name + "=" + encodeURIComponent(val));
+                          else if (name === 'lcd_pin') params.push(name + "=0");
+                        }
+                      };
+                      add("config", "evse_config_config");
+                      add("lock", "evse_config_lock");
+                      add("current_max", "evse_config_current_max");
+                      add("current_max_circuit", "evse_config_current_max_circuit");
+                      add("current_main", "evse_config_current_main");
+                      add("loadbl", "evse_config_loadbl");
+                      add("grid", "evse_config_grid");
+                      add("sb2_wifi", "evse_config_sb2_wifi");
+                      add("mains_meter_type", "evse_config_mains_meter_type");
+                      add("mains_meter_address", "evse_config_mains_meter_address");
+                      add("ev_meter_type", "evse_config_ev_meter_type");
+                      add("ev_meter_address", "evse_config_ev_meter_address");
+                      add("switch", "evse_config_switch");
+                      add("rcmon", "evse_config_rcmon", true);
+                      add("rfidreader", "evse_config_rfidreader");
+                      add("autoupdate", "evse_config_autoupdate", true);
+                      add("max_temp", "evse_config_max_temp");
+                      add("lcd_pin", "evse_config_lcd_pin");
+                      add("app_server", "evse_config_app_server", true);
+                      if (params.length === 0) return;
+                      $.post("/settings?" + params.join("&")).then(function() { loadData(); alert("EVSE configuration saved."); }).fail(function() { alert("Save failed."); });
+                    }
                     function toggleEnableOcpp() {
                       var enableOcppCheckbox = document.getElementById("enable_ocpp");
                       $.post( "/settings?ocpp_update=1&ocpp_mode=" + (enableOcppCheckbox.checked == true ? 1 : 0));
@@ -1600,6 +1692,108 @@
                                         </form>
                                       </div>
                                     </div>
+                                  </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                  <div id="evse_config_section" style="margin-bottom: 20px;" class="config">
+                      <div class="card border-left-primary shadow h-100 py-2">
+                        <div class="card-body">
+                            <div class="row no-gutters align-items-center">
+                                <div class="col mr-2">
+                                    <div class="text font-weight-bold text-primary text-uppercase mb-1">EVSE Configuration</div>
+                                    <p class="text-muted small">LCD/menu settings on the web. On load-balancing slaves, master-only fields are read-only.</p>
+
+                                    <div id="evse_config_master_only">
+                                        <h6 class="text-secondary mt-3 mb-2">Node &amp; hardware</h6>
+                                        <div class="row no-gutters align-items-center">
+                                            <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">Config:</div>
+                                            <div class="col" style="max-width:425px;"><select id="evse_config_config" title="Fixed Cable or Type 2 Socket"><option value="0">Socket (Type 2)</option><option value="1">Fixed Cable</option></select></div>
+                                        </div>
+                                        <div class="row no-gutters align-items-center">
+                                            <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">Lock:</div>
+                                            <div class="col" style="max-width:425px;"><select id="evse_config_lock"><option value="0">Disabled</option><option value="1">Solenoid</option><option value="2">Motor</option></select></div>
+                                        </div>
+                                        <div class="row no-gutters align-items-center">
+                                            <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">Max current (A):</div>
+                                            <div class="col" style="max-width:425px;"><input type="number" id="evse_config_current_max" min="6" max="80" style="width:80px;" class="ui-corner-all ui-shadow-inset"> per phase</div>
+                                        </div>
+                                        <div class="row no-gutters align-items-center">
+                                            <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">Circuit max (A):</div>
+                                            <div class="col" style="max-width:425px;"><input type="number" id="evse_config_current_max_circuit" min="10" max="160" style="width:80px;" class="ui-corner-all ui-shadow-inset"></div>
+                                        </div>
+                                        <div class="row no-gutters align-items-center">
+                                            <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">Load balance:</div>
+                                            <div class="col" style="max-width:425px;"><select id="evse_config_loadbl"><option value="0">Disabled</option><option value="1">Master</option><option value="2">Node 1</option><option value="3">Node 2</option><option value="4">Node 3</option><option value="5">Node 4</option><option value="6">Node 5</option><option value="7">Node 6</option><option value="8">Node 7</option></select></div>
+                                        </div>
+
+                                        <h6 class="text-secondary mt-3 mb-2">System &amp; grid</h6>
+                                        <div class="row no-gutters align-items-center">
+                                            <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">Mains max (A):</div>
+                                            <div class="col" style="max-width:425px;"><input type="number" id="evse_config_current_main" min="10" max="200" style="width:80px;" class="ui-corner-all ui-shadow-inset"> per phase</div>
+                                        </div>
+                                        <div class="row no-gutters align-items-center">
+                                            <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">Grid:</div>
+                                            <div class="col" style="max-width:425px;"><select id="evse_config_grid"><option value="0">4Wire</option><option value="1">3Wire</option></select></div>
+                                        </div>
+                                        <div class="row no-gutters align-items-center">
+                                            <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">SB2 WiFi:</div>
+                                            <div class="col" style="max-width:425px;"><select id="evse_config_sb2_wifi"><option value="0">Disabled</option><option value="1">Enabled</option><option value="2">SetupWifi</option></select></div>
+                                        </div>
+                                        <div class="row no-gutters align-items-center">
+                                            <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">Mains meter type:</div>
+                                            <div class="col" style="max-width:425px;"><select id="evse_config_mains_meter_type"><option value="0">Disabled</option></select></div>
+                                        </div>
+                                        <div class="row no-gutters align-items-center">
+                                            <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">Mains meter addr:</div>
+                                            <div class="col" style="max-width:425px;"><input type="number" id="evse_config_mains_meter_address" min="10" max="247" style="width:80px;" class="ui-corner-all ui-shadow-inset"> (Modbus 10–247)</div>
+                                        </div>
+
+                                        <h6 class="text-secondary mt-3 mb-2">EV meter</h6>
+                                        <div class="row no-gutters align-items-center">
+                                            <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">EV meter type:</div>
+                                            <div class="col" style="max-width:425px;"><select id="evse_config_ev_meter_type"><option value="0">Disabled</option></select></div>
+                                        </div>
+                                        <div class="row no-gutters align-items-center">
+                                            <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">EV meter addr:</div>
+                                            <div class="col" style="max-width:425px;"><input type="number" id="evse_config_ev_meter_address" min="11" max="247" style="width:80px;" class="ui-corner-all ui-shadow-inset"> (Modbus 11–247)</div>
+                                        </div>
+                                    </div>
+
+                                    <h6 class="text-secondary mt-3 mb-2">Switch &amp; safety</h6>
+                                    <div class="row no-gutters align-items-center">
+                                        <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">Switch (SW pin):</div>
+                                        <div class="col" style="max-width:425px;"><select id="evse_config_switch"><option value="0">Disabled</option><option value="1">Access B</option><option value="2">Access S</option><option value="3">Sma-Sol B</option><option value="4">Sma-Sol S</option><option value="5">Grid Relay</option><option value="6">Custom B</option><option value="7">Custom S</option></select></div>
+                                    </div>
+                                    <div class="row no-gutters align-items-center">
+                                        <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">RCMon:</div>
+                                        <div class="col" style="max-width:425px;"><input type="checkbox" id="evse_config_rcmon"> <label for="evse_config_rcmon">Residual Current Monitor on pin RCM</label></div>
+                                    </div>
+                                    <div class="row no-gutters align-items-center">
+                                        <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">RFID reader:</div>
+                                        <div class="col" style="max-width:425px;"><select id="evse_config_rfidreader"><option value="0">Disabled</option><option value="1">EnableAll</option><option value="2">EnableOne</option><option value="3">Learn</option><option value="4">Delete</option><option value="5">DeleteAll</option><option value="6">Rmt/OCPP</option></select></div>
+                                    </div>
+
+                                    <h6 class="text-secondary mt-3 mb-2">General</h6>
+                                    <div class="row no-gutters align-items-center">
+                                        <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">Autoupdate:</div>
+                                        <div class="col" style="max-width:425px;"><input type="checkbox" id="evse_config_autoupdate"> <label for="evse_config_autoupdate">Automatic firmware update</label></div>
+                                    </div>
+                                    <div class="row no-gutters align-items-center">
+                                        <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">Max temp (°C):</div>
+                                        <div class="col" style="max-width:425px;"><input type="number" id="evse_config_max_temp" min="40" max="75" style="width:80px;" class="ui-corner-all ui-shadow-inset"> EVSE module limit</div>
+                                    </div>
+                                    <div class="row no-gutters align-items-center">
+                                        <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">LCD PIN:</div>
+                                        <div class="col" style="max-width:425px;"><input type="number" id="evse_config_lcd_pin" min="0" max="9999" style="width:80px;" placeholder="0000" title="PIN for web LCD control" class="ui-corner-all ui-shadow-inset"> Web LCD unlock</div>
+                                    </div>
+                                    <div id="evse_config_app_server_row" class="row no-gutters align-items-center">
+                                        <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">App server:</div>
+                                        <div class="col" style="max-width:425px;"><input type="checkbox" id="evse_config_app_server"> <label for="evse_config_app_server">Cloud connection for SmartEVSE App</label></div>
+                                    </div>
+
+                                    <button type="button" class="ui-btn ui-shadow ui-corner-all mt-2" onclick="saveEvseConfig()">Save EVSE configuration</button>
                                   </div>
                                 </div>
                             </div>
