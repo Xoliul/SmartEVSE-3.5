@@ -71,11 +71,12 @@
        */
       const $qs = (selector) => document.querySelector(selector);
 
-      function loadData(){
+      function loadData(applyFormValues){
         $.ajax({
               url: endpoint
           }).then(function(data) {
             var isFirstLoad = !initiated;
+            var applyToForm = isFirstLoad || applyFormValues;
             if(!initiated) {
               initiated = true;
               // Set the text and the data-version attribute dynamically
@@ -218,11 +219,12 @@
             $('#current_min').text(data.settings.current_min.toFixed(1) + " A");
             $('#current_max').text(data.settings.current_max.toFixed(1) + " A");
             $('#override_current').text((data.settings.override_current/10).toFixed(1) + " A");
-            if (data.evse.loadbl < 2 && data.settings.override_current !== undefined) {
+            if (applyToForm && data.evse.loadbl < 2 && data.settings.override_current !== undefined) {
               var ov = Math.round(Number(data.settings.override_current) / 10);
               var $sel = $('#mode_override_current');
               if ($sel.find('option[value="' + ov + '"]').length) { $sel.val(ov); try { $sel.selectmenu('refresh'); } catch (e) {} }
             }
+            $('#enable_C2').text(data.settings.enable_C2);
             $('#enable_C2').text(data.settings.enable_C2);
             if (data.settings.starttime) {
                 $('#starttime_date_time').text(new Date(data.settings.starttime * 1000).toLocaleDateString() + " " + new Date(data.settings.starttime * 1000).toLocaleTimeString());
@@ -297,6 +299,8 @@
               $('#evmeter_charged_kwh').text((data.ev_meter.charged_wh/1000).toFixed(1) + " kWh");
             }
 
+            // Only overwrite editable form fields on first load, 400ms re-run, or after save (not on 5s poll)
+            if (applyToForm) {
             $('#solar_start_current').val(data.settings.solar_start_current);
             $('#solar_max_import_current').val(data.settings.solar_max_import);
             $('#solar_stop_time').val(data.settings.solar_stop_time);
@@ -428,9 +432,10 @@
             } else {
               $('[id=ocpp_config_outer]').hide();
             }
+            }
 
             // After first load, re-run once so jQuery Mobile–enhanced widgets (selectmenu, checkboxradio, textinput) show correct values
-            if (isFirstLoad) setTimeout(loadData, 400);
+            if (isFirstLoad) setTimeout(function() { loadData(true); }, 400);
 
             setTimeout("loadData()", 5000);
           });
@@ -1462,7 +1467,7 @@
                       add("lcd_pin", "evse_config_lcd_pin");
                       add("app_server", "evse_config_app_server", true);
                       if (params.length === 0) return;
-                      $.post("/settings?" + params.join("&")).then(function() { loadData(); alert("EVSE configuration saved."); }).fail(function() { alert("Save failed."); });
+                      $.post("/settings?" + params.join("&")).then(function() { loadData(true); alert("EVSE configuration saved."); }).fail(function() { alert("Save failed."); });
                     }
                     function toggleEnableOcpp() {
                       var enableOcppCheckbox = document.getElementById("enable_ocpp");
@@ -1473,7 +1478,7 @@
                       $.post( "/settings?ocpp_update=1&ocpp_auto_auth=" + (autoAuthCheckbox.checked == true ? 1 : 0));
                       //show idTag box immediately if Auto auth checkbox is checked
                       if (autoAuthCheckbox.checked) {
-                        loadData();
+                        loadData(true);
                       }
                     }
                     function toggleOcppEdit() {
