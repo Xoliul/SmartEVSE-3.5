@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SmartEVSE log</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: monospace; font-size: 12px; margin: 8px; background: #1e1e1e; color: #d4d4d4; }
+    h1 { font-size: 1rem; margin: 0 0 8px 0; }
+    #toolbar { margin-bottom: 8px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+    #filterBar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+    #filterBar label { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; user-select: none; }
+    #filterBar input[type="checkbox"] { margin: 0; }
+    #filterBar .filter-btn { padding: 2px 8px; border-radius: 4px; border: 1px solid #555; background: #333; color: #d4d4d4; cursor: pointer; font-size: 11px; }
+    #filterBar .filter-btn.off { opacity: 0.5; }
+    #filterBar .filter-btn.A, #filterBar .filter-btn.E { border-color: #f48771; color: #f48771; }
+    #filterBar .filter-btn.W { border-color: #dcdcaa; color: #dcdcaa; }
+    #filterBar .filter-btn.I { border-color: #9cdcfe; color: #9cdcfe; }
+    #filterBar .filter-btn.D { border-color: #ce9178; color: #ce9178; }
+    #filterBar .filter-btn.V { border-color: #808080; color: #808080; }
+    #filterBar .filter-btn.other { border-color: #d4d4d4; color: #d4d4d4; }
+    #log { white-space: pre-wrap; word-break: break-all; padding: 8px; background: #252526; border-radius: 4px; max-height: 70vh; overflow-y: auto; }
+    .line { margin: 2px 0; }
+    .log-A, .log-E { color: #f48771; }
+    .log-W { color: #dcdcaa; }
+    .log-I { color: #9cdcfe; }
+    .log-D { color: #ce9178; }
+    .log-V { color: #808080; }
+    .log-unknown { color: #d4d4d4; }
+    a { color: #569cd6; }
+  </style>
+</head>
+<body>
+  <h1>SmartEVSE log</h1>
+  <div id="toolbar">
+    <div id="filterBar"></div>
+    <label>Poll every <input type="number" id="interval" value="3" min="1" max="60" style="width:3em"> s</label>
+    <span id="status" style="margin-left:0.5em"></span>
+  </div>
+  <div id="log"></div>
+
+  <script>
+    (function() {
+      const LOG_LEVELS = ['A', 'E', 'W', 'I', 'D', 'V'];
+      const STORAGE_KEY = 'smartevse_log_filter';
+      const logEl = document.getElementById('log');
+      const statusEl = document.getElementById('status');
+      const filterBarEl = document.getElementById('filterBar');
+      const intervalInput = document.getElementById('interval');
+      let pollTimer = null;
+      let filterEnabled = {}; // level -> true/false
+      let levelsSeen = new Set(LOG_LEVELS.concat(['other']));
+
+      function loadFilter() {
+        try {
+          const s = localStorage.getItem(STORAGE_KEY);
+          if (s) {
+            const o = JSON.parse(s);
+            LOG_LEVELS.forEach(function(l) { filterEnabled[l] = o[l] !== false; });
+            filterEnabled['other'] = o['other'] !== false;
+            return;
+          }
+        } catch (e) {}
+        LOG_LEVELS.forEach(function(l) { filterEnabled[l] = true; });
+        filterEnabled['other'] = true;
+      }
+
+      function saveFilter() {
+        try {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(filterEnabled));
+        } catch (e) {}
+      }
+
+      function levelFromLine(line) {
+        const m = line.match(/^\[([AEWIDV])\]/);
+        return m ? m[1] : 'other';
+      }
+
+      function buildFilterBar() {
+        filterBarEl.innerHTML = '';
+        const levels = Array.from(levelsSeen).sort();
+        levels.forEach(function(level) {
+          const label = document.createElement('label');
+          const cb = document.createElement('input');
+          cb.type = 'checkbox';
+          cb.checked = filterEnabled[level] !== false;
+          cb.dataset.level = level;
+          cb.addEventListener('change', function() {
+            filterEnabled[level] = cb.checked;
+            saveFilter();
+            updateAllCheckbox();
+            renderLines(currentLines);
+          });
+          label.appendChild(cb);
+          const span = document.createElement('span');
+          span.className = 'filter-btn ' + level;
+          span.textContent = level === 'other' ? 'Other' : level;
+          label.appendChild(span);
+          filterBarEl.appendChild(label);
+        });
+        const allLabel = document.createElement('label');
+        const allCb = document.createElement('input');
+        allCb.type = 'checkbox';
+        allCb.id = 'filterAll';
+        allCb.title = 'Select all';
+        allCb.addEventListener('change', function() {
+          const on = allCb.checked;
+          levels.forEach(function(l) { filterEnabled[l] = on; });
+          saveFilter();
+            filterBarEl.querySelectorAll('input[type="checkbox"][data-level]').forEach(function(c) {
+            if (c !== allCb) c.checked = on;
+          });
+          renderLines(currentLines);
+        });
+        allLabel.appendChild(allCb);
+        const allSpan = document.createElement('span');
+        allSpan.className = 'filter-btn';
+        allSpan.textContent = 'All';
+        allLabel.appendChild(allSpan);
+        filterBarEl.appendChild(allLabel);
+        updateAllCheckbox();
+      }
+
+      function updateAllCheckbox() {
+        const allCb = document.getElementById('filterAll');
+        if (!allCb) return;
+        const levels = Array.from(levelsSeen);
+        const allChecked = levels.every(function(l) { return filterEnabled[l] !== false; });
+        const noneChecked = levels.every(function(l) { return filterEnabled[l] === false; });
+        allCb.checked = allChecked;
+        allCb.indeterminate = !allChecked && !noneChecked;
+      }
+
+      let currentLines = [];
+
+      function renderLines(lines) {
+        logEl.innerHTML = '';
+        lines.forEach(function(line) {
+          const level = levelFromLine(line);
+          if (filterEnabled[level] === false) return;
+          const div = document.createElement('div');
+          div.className = 'line log-' + (LOG_LEVELS.indexOf(level) >= 0 ? level : 'unknown');
+          div.textContent = line;
+          logEl.appendChild(div);
+        });
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+
+      function fetchLogs() {
+        fetch('/api/logs?lines=80')
+          .then(function(r) { return r.json(); })
+          .then(function(data) {
+            statusEl.textContent = 'total: ' + (data.total || 0) + ' | available: ' + (data.available || 0);
+            const arr = data.lines || [];
+            currentLines = arr;
+            arr.forEach(function(line) {
+              levelsSeen.add(levelFromLine(line));
+            });
+            if (filterBarEl.children.length === 0) buildFilterBar();
+            else if (levelsSeen.size > filterBarEl.querySelectorAll('[data-level]').length) buildFilterBar();
+            renderLines(currentLines);
+          })
+          .catch(function() {
+            statusEl.textContent = 'Not available (open this page to start logging).';
+            logEl.innerHTML = 'Waiting for /api/logs… Logging is subscriber-based: while this page is open, recent log messages are captured.';
+          });
+      }
+
+      function startPolling() {
+        if (pollTimer) clearInterval(pollTimer);
+        let ms = (intervalInput.value ? parseInt(intervalInput.value, 10) : 3) * 1000;
+        if (ms < 1000) ms = 1000;
+        fetchLogs();
+        pollTimer = setInterval(fetchLogs, ms);
+      }
+
+      loadFilter();
+      intervalInput.addEventListener('change', startPolling);
+      startPolling();
+    })();
+  </script>
+</body>
+</html>

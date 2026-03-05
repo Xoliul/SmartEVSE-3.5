@@ -839,6 +839,65 @@ void mqtt_receive_callback(const String topic, const String payload) {
             }
         }
     }
+    // Phase 3: exposed LCD/menu settings via MQTT Set/ (WEB_SETTINGS_EXPOSURE)
+    else if (topic == MQTTprefix + "/Set/Config" && LoadBl < 2) {
+        int val = payload.toInt();
+        if (setItemValue(MENU_CONFIG, val)) request_write_settings();
+    } else if (topic == MQTTprefix + "/Set/Lock" && LoadBl < 2) {
+        int val = payload.toInt();
+        if (setItemValue(MENU_LOCK, val)) request_write_settings();
+    } else if (topic == MQTTprefix + "/Set/CurrentMax" && LoadBl < 2) {
+        int val = payload.toInt();
+        if (setItemValue(MENU_MAX, val)) request_write_settings();
+    } else if (topic == MQTTprefix + "/Set/CurrentMain" && LoadBl < 2) {
+        int val = payload.toInt();
+        if (setItemValue(MENU_MAINS, val)) request_write_settings();
+    } else if (topic == MQTTprefix + "/Set/CurrentMaxCircuit" && LoadBl < 2) {
+        int val = payload.toInt();
+        if (setItemValue(MENU_CIRCUIT, val)) request_write_settings();
+    } else if (topic == MQTTprefix + "/Set/LoadBl" && LoadBl < 2) {
+        int val = payload.toInt();
+        if (setItemValue(MENU_LOADBL, val)) request_write_settings();
+    } else if (topic == MQTTprefix + "/Set/Grid" && LoadBl < 2) {
+        int val = payload.toInt();
+        if (setItemValue(MENU_GRID, val)) request_write_settings();
+    } else if (topic == MQTTprefix + "/Set/SB2Wifi" && LoadBl < 2) {
+        int val = payload.toInt();
+        if (setItemValue(MENU_SB2_WIFI, val)) request_write_settings();
+    } else if (topic == MQTTprefix + "/Set/MainsMeterType" && LoadBl < 2) {
+        int val = payload.toInt();
+        if (setItemValue(MENU_MAINSMETER, val)) request_write_settings();
+    } else if (topic == MQTTprefix + "/Set/MainsMeterAddress" && LoadBl < 2) {
+        int val = payload.toInt();
+        if (setItemValue(MENU_MAINSMETERADDRESS, val)) request_write_settings();
+    } else if (topic == MQTTprefix + "/Set/EVMeterType" && LoadBl < 2) {
+        int val = payload.toInt();
+        if (setItemValue(MENU_EVMETER, val)) request_write_settings();
+    } else if (topic == MQTTprefix + "/Set/EVMeterAddress" && LoadBl < 2) {
+        int val = payload.toInt();
+        if (setItemValue(MENU_EVMETERADDRESS, val)) request_write_settings();
+    } else if (topic == MQTTprefix + "/Set/Switch") {
+        int val = payload.toInt();
+        if (setItemValue(MENU_SWITCH, val)) request_write_settings();
+    } else if (topic == MQTTprefix + "/Set/RCmon") {
+        int val = payload.toInt();
+        if (setItemValue(MENU_RCMON, val)) request_write_settings();
+    } else if (topic == MQTTprefix + "/Set/RFIDReader") {
+        int val = payload.toInt();
+        if (setItemValue(MENU_RFIDREADER, val)) request_write_settings();
+    } else if (topic == MQTTprefix + "/Set/AutoUpdate") {
+        int val = payload.toInt();
+        if (setItemValue(MENU_AUTOUPDATE, val)) request_write_settings();
+    } else if (topic == MQTTprefix + "/Set/MaxTemp") {
+        int val = payload.toInt();
+        if (setItemValue(MENU_MAX_TEMP, val)) request_write_settings();
+    } else if (topic == MQTTprefix + "/Set/LCDPin") {
+        int val = payload.toInt();
+        if (setItemValue(MENU_LCDPIN, val)) request_write_settings();
+    } else if (topic == MQTTprefix + "/Set/AppServer") {
+        int val = payload.toInt();
+        if (setItemValue(MENU_APPSERVER, val)) request_write_settings();
+    }
 
     // Make sure MQTT updates directly to prevent debounces
     lastMqttUpdate = 10;
@@ -1063,6 +1122,24 @@ void mqttPublishData() {
         MQTTclient.publish(MQTTprefix + "/LoadBl", LoadBl, true, 0);
         MQTTclient.publish(MQTTprefix + "/PairingPin", PairingPin, true, 0);
         MQTTclient.publish(MQTTprefix + "/SolarStopTimer", SolarStopTimer, false, 0);
+        // Phase 3: exposed LCD/menu settings (WEB_SETTINGS_EXPOSURE) - state for HA
+        MQTTclient.publish(MQTTprefix + "/Config", String(Config), true, 0);
+        MQTTclient.publish(MQTTprefix + "/Lock", String(Lock), true, 0);
+        MQTTclient.publish(MQTTprefix + "/CurrentMain", String(MaxMains), true, 0);
+        MQTTclient.publish(MQTTprefix + "/CurrentMaxCircuit", String(MaxCircuit), true, 0);
+        MQTTclient.publish(MQTTprefix + "/Grid", String(Grid), true, 0);
+        MQTTclient.publish(MQTTprefix + "/SB2Wifi", String(SB2_WIFImode), true, 0);
+        MQTTclient.publish(MQTTprefix + "/MainsMeterType", String(MainsMeter.Type), true, 0);
+        MQTTclient.publish(MQTTprefix + "/MainsMeterAddress", String(MainsMeter.Address), true, 0);
+        MQTTclient.publish(MQTTprefix + "/EVMeterType", String(EVMeter.Type), true, 0);
+        MQTTclient.publish(MQTTprefix + "/EVMeterAddress", String(EVMeter.Address), true, 0);
+        MQTTclient.publish(MQTTprefix + "/Switch", String(Switch), true, 0);
+        MQTTclient.publish(MQTTprefix + "/RCmon", String(RCmon), true, 0);
+        MQTTclient.publish(MQTTprefix + "/RFIDReader", String(RFIDReader), true, 0);
+        MQTTclient.publish(MQTTprefix + "/AutoUpdate", String(AutoUpdate), true, 0);
+        MQTTclient.publish(MQTTprefix + "/MaxTemp", String(maxTemp), true, 0);
+        MQTTclient.publish(MQTTprefix + "/LCDPin", String(LCDPin), true, 0);
+        MQTTclient.publish(MQTTprefix + "/AppServer", String(MQTTSmartServer ? 1 : 0), true, 0);
 }
 
 // SmartEVSE server MQTT client setup - subscribe to Set topics
@@ -1609,12 +1686,25 @@ bool handle_URI(struct mg_connection *c, struct mg_http_message *hm,  webServerR
         doc["settings"]["solar_stop_time"] = StopTime;
         doc["settings"]["enable_C2"] = StrEnableC2[EnableC2];
         doc["settings"]["mains_meter"] = EMConfig[MainsMeter.Type].Desc;
+        doc["settings"]["mains_meter_type"] = MainsMeter.Type;
         doc["settings"]["starttime"] = (DelayedStartTime.epoch2 ? DelayedStartTime.epoch2 + EPOCH2_OFFSET : 0);
         doc["settings"]["stoptime"] = (DelayedStopTime.epoch2 ? DelayedStopTime.epoch2 + EPOCH2_OFFSET : 0);
         doc["settings"]["repeat"] = DelayedRepeat;
         doc["settings"]["lcdlock"] = LCDlock;
         doc["settings"]["lock"] = Lock;
         doc["settings"]["cablelock"] = CableLock;
+        doc["settings"]["config"] = Config;
+        doc["settings"]["switch"] = Switch;
+        doc["settings"]["rcmon"] = RCmon;
+        doc["settings"]["grid"] = Grid;
+        doc["settings"]["sb2_wifi"] = SB2_WIFImode;
+        doc["settings"]["mains_meter_address"] = MainsMeter.Address;
+        doc["settings"]["autoupdate"] = AutoUpdate;
+        doc["settings"]["lcd_pin"] = LCDPin;
+        doc["settings"]["rfidreader"] = RFIDReader;
+#if MQTT
+        doc["settings"]["app_server"] = MQTTSmartServer ? 1 : 0;
+#endif
 #if MODEM
             doc["settings"]["required_evccid"] = RequiredEVCCID;
 #if SMARTEVSE_VERSION < 40
@@ -1671,6 +1761,7 @@ bool handle_URI(struct mg_connection *c, struct mg_http_message *hm,  webServerR
         doc["home_battery"]["last_update"] = homeBatteryLastUpdate;
 
         doc["ev_meter"]["description"] = EMConfig[EVMeter.Type].Desc;
+        doc["ev_meter"]["type"] = EVMeter.Type;
         doc["ev_meter"]["address"] = EVMeter.Address;
         doc["ev_meter"]["import_active_power"] = EVMeter.PowerMeasured; // Watt
         doc["ev_meter"]["total_wh"] = EVMeter.Energy; // Wh
@@ -1681,6 +1772,13 @@ bool handle_URI(struct mg_connection *c, struct mg_http_message *hm,  webServerR
         doc["ev_meter"]["currents"]["L3"] = EVMeter.Irms[2];
         doc["ev_meter"]["import_active_energy"] = EVMeter.Import_active_energy; // Wh
         doc["ev_meter"]["export_active_energy"] = EVMeter.Export_active_energy; // Wh
+
+        {
+            JsonArray arr = doc.createNestedArray("meter_types");
+            for (size_t i = 0; i < EMConfigSize / sizeof(EMConfig[0]); i++) {
+                arr.add((const char*)EMConfig[i].Desc);
+            }
+        }
 
         doc["mains_meter"]["import_active_energy"] = MainsMeter.Import_active_energy; // Wh
         doc["mains_meter"]["export_active_energy"] = MainsMeter.Export_active_energy; // Wh
@@ -1725,7 +1823,7 @@ bool handle_URI(struct mg_connection *c, struct mg_http_message *hm,  webServerR
         if(request->hasParam("mqtt_update")) {
             return false;                                                       // handled in network.cpp
         }
-        DynamicJsonDocument doc(512); // https://arduinojson.org/v6/assistant/
+        DynamicJsonDocument doc(1024); // https://arduinojson.org/v6/assistant/ (increased for exposed menu settings)
 
         if(request->hasParam("backlight")) {
             int backlight = request->getParam("backlight")->value().toInt();
@@ -1949,6 +2047,108 @@ bool handle_URI(struct mg_connection *c, struct mg_http_message *hm,  webServerR
             }
         }
 
+        // Expose LCD/menu settings via POST (Phase 1 - WEB_SETTINGS_EXPOSURE)
+        // Master-only settings: only accept when LoadBl < 2
+        if (LoadBl < 2) {
+            if(request->hasParam("current_max")) {
+                int val = request->getParam("current_max")->value().toInt();
+                if (setItemValue(MENU_MAX, val)) doc["current_max"] = getItemValue(MENU_MAX);
+                else doc["current_max"] = "Value not allowed!";
+            }
+            if(request->hasParam("current_main")) {
+                int val = request->getParam("current_main")->value().toInt();
+                if (setItemValue(MENU_MAINS, val)) doc["current_main"] = getItemValue(MENU_MAINS);
+                else doc["current_main"] = "Value not allowed!";
+            }
+            if(request->hasParam("current_max_circuit")) {
+                int val = request->getParam("current_max_circuit")->value().toInt();
+                if (setItemValue(MENU_CIRCUIT, val)) doc["current_max_circuit"] = getItemValue(MENU_CIRCUIT);
+                else doc["current_max_circuit"] = "Value not allowed!";
+            }
+            if(request->hasParam("config")) {
+                int val = request->getParam("config")->value().toInt();
+                if (setItemValue(MENU_CONFIG, val)) doc["config"] = getItemValue(MENU_CONFIG);
+                else doc["config"] = "Value not allowed!";
+            }
+            if(request->hasParam("lock")) {
+                int val = request->getParam("lock")->value().toInt();
+                if (setItemValue(MENU_LOCK, val)) doc["lock"] = getItemValue(MENU_LOCK);
+                else doc["lock"] = "Value not allowed!";
+            }
+            if(request->hasParam("loadbl")) {
+                int val = request->getParam("loadbl")->value().toInt();
+                if (setItemValue(MENU_LOADBL, val)) doc["loadbl"] = getItemValue(MENU_LOADBL);
+                else doc["loadbl"] = "Value not allowed!";
+            }
+            if(request->hasParam("grid")) {
+                int val = request->getParam("grid")->value().toInt();
+                if (setItemValue(MENU_GRID, val)) doc["grid"] = getItemValue(MENU_GRID);
+                else doc["grid"] = "Value not allowed!";
+            }
+            if(request->hasParam("sb2_wifi")) {
+                int val = request->getParam("sb2_wifi")->value().toInt();
+                if (setItemValue(MENU_SB2_WIFI, val)) doc["sb2_wifi"] = getItemValue(MENU_SB2_WIFI);
+                else doc["sb2_wifi"] = "Value not allowed!";
+            }
+            if(request->hasParam("mains_meter_type")) {
+                int val = request->getParam("mains_meter_type")->value().toInt();
+                if (setItemValue(MENU_MAINSMETER, val)) doc["mains_meter_type"] = getItemValue(MENU_MAINSMETER);
+                else doc["mains_meter_type"] = "Value not allowed!";
+            }
+            if(request->hasParam("mains_meter_address")) {
+                int val = request->getParam("mains_meter_address")->value().toInt();
+                if (setItemValue(MENU_MAINSMETERADDRESS, val)) doc["mains_meter_address"] = getItemValue(MENU_MAINSMETERADDRESS);
+                else doc["mains_meter_address"] = "Value not allowed!";
+            }
+            if(request->hasParam("ev_meter_type")) {
+                int val = request->getParam("ev_meter_type")->value().toInt();
+                if (setItemValue(MENU_EVMETER, val)) doc["ev_meter_type"] = getItemValue(MENU_EVMETER);
+                else doc["ev_meter_type"] = "Value not allowed!";
+            }
+            if(request->hasParam("ev_meter_address")) {
+                int val = request->getParam("ev_meter_address")->value().toInt();
+                if (setItemValue(MENU_EVMETERADDRESS, val)) doc["ev_meter_address"] = getItemValue(MENU_EVMETERADDRESS);
+                else doc["ev_meter_address"] = "Value not allowed!";
+            }
+        }
+        // Per-node or shared settings (allowed on slave too)
+        if(request->hasParam("switch")) {
+            int val = request->getParam("switch")->value().toInt();
+            if (setItemValue(MENU_SWITCH, val)) doc["switch"] = getItemValue(MENU_SWITCH);
+            else doc["switch"] = "Value not allowed!";
+        }
+        if(request->hasParam("rcmon")) {
+            int val = request->getParam("rcmon")->value().toInt();
+            if (setItemValue(MENU_RCMON, val)) doc["rcmon"] = getItemValue(MENU_RCMON);
+            else doc["rcmon"] = "Value not allowed!";
+        }
+        if(request->hasParam("rfidreader")) {
+            int val = request->getParam("rfidreader")->value().toInt();
+            if (setItemValue(MENU_RFIDREADER, val)) doc["rfidreader"] = getItemValue(MENU_RFIDREADER);
+            else doc["rfidreader"] = "Value not allowed!";
+        }
+        if(request->hasParam("autoupdate")) {
+            int val = request->getParam("autoupdate")->value().toInt();
+            if (setItemValue(MENU_AUTOUPDATE, val)) doc["autoupdate"] = getItemValue(MENU_AUTOUPDATE);
+            else doc["autoupdate"] = "Value not allowed!";
+        }
+        if(request->hasParam("max_temp")) {
+            int val = request->getParam("max_temp")->value().toInt();
+            if (setItemValue(MENU_MAX_TEMP, val)) doc["max_temp"] = getItemValue(MENU_MAX_TEMP);
+            else doc["max_temp"] = "Value not allowed!";
+        }
+        if(request->hasParam("lcd_pin")) {
+            int val = request->getParam("lcd_pin")->value().toInt();
+            if (setItemValue(MENU_LCDPIN, val)) doc["lcd_pin"] = getItemValue(MENU_LCDPIN);
+            else doc["lcd_pin"] = "Value not allowed!";
+        }
+#if MQTT
+        if(request->hasParam("app_server")) {
+            int val = request->getParam("app_server")->value().toInt();
+            if (setItemValue(MENU_APPSERVER, val)) doc["app_server"] = getItemValue(MENU_APPSERVER);
+            else doc["app_server"] = "Value not allowed!";
+        }
+#endif
 #if ENABLE_OCPP && defined(SMARTEVSE_VERSION) //run OCPP only on ESP32
         if(request->hasParam("ocpp_update")) {
             if (request->getParam("ocpp_update")->value().toInt() == 1) {

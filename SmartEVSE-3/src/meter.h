@@ -77,6 +77,7 @@ struct EMstruct {
 };
 
 extern struct EMstruct EMConfig[];
+extern uint16_t EMConfigSize;
 extern struct Sensorbox SB2;
 
 class Meter {

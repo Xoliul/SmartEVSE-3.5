@@ -1520,6 +1520,24 @@ void CalcBalancedCurrent(char mod) {
 #endif
     SEND_TO_ESP32(Balanced0)
     SEND_TO_ESP32(IsetBalanced)
+#ifdef SMARTEVSE_VERSION
+    {
+        static unsigned long lastBalanceLog = 0;
+        unsigned long now = millis();
+        if (saveActiveEVSE > 0 && (Mode == MODE_SOLAR || LoadBl >= 1) && (now - lastBalanceLog >= 15000)) {
+            lastBalanceLog = now;
+            if (Mode == MODE_SOLAR) {
+                _LOG_I("Solar: Isum=%d.%dA IsumImport=%d.%dA IsetBalanced=%d.%dA SolarStopTimer=%us %s\n",
+                    Isum/10, abs(Isum%10), IsumImport/10, abs(IsumImport%10), IsetBalanced/10, abs(IsetBalanced%10), (unsigned)SolarStopTimer,
+                    LimitedByMaxSumMains ? "MaxMains" : (Idifference <= 0 ? "no headroom" : "surplus"));
+            } else {
+                _LOG_I("LoadBalance: IsetBalanced=%d.%dA Idifference=%d.%dA ActiveEVSE=%u %s\n",
+                    IsetBalanced/10, abs(IsetBalanced%10), Idifference/10, abs(Idifference%10), saveActiveEVSE,
+                    LimitedByMaxSumMains ? "MaxMains" : "headroom");
+            }
+        }
+    }
+#endif
 #else //ESP32v4
     printf("@CalcBalancedCurrent:%i\n", mod);
 #endif

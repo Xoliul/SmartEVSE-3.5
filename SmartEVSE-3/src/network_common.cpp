@@ -24,6 +24,9 @@
 #if SMARTEVSE_VERSION >=30
 #include "OneWire.h"
 #endif
+#if defined(SMARTEVSE_VERSION)
+#include "web_log.h"
+#endif
 
 #ifndef DEBUG_DISABLED
 RemoteDebug Debug;
@@ -1750,6 +1753,53 @@ static void fn_http_server(struct mg_connection *c, int ev, void *ev_data) {
         } else if (mg_http_match_uri(hm, "/mqtt_ca_cert") && !memcmp("GET", hm->method.buf, hm->method.len)) {
             String cert = readMqttCaCert();
             mg_http_reply(c, 200, "Content-Type: text/plain\r\n", "%s\r\n", cert.c_str());
+        } else if (mg_http_match_uri(hm, "/api/logs") && !memcmp("GET", hm->method.buf, hm->method.len)) {
+#if defined(SMARTEVSE_VERSION)
+            web_log_init();
+            int was_active = web_log_subscriber_active();
+            web_log_set_subscriber_active();
+            if (!was_active)
+                web_log_append_raw("[I] Log capture active. _LOG_A messages will appear here.");
+            int num_lines = 50;
+            char lines_buf[32];
+            if (mg_http_get_var(&hm->query, "lines", lines_buf, sizeof(lines_buf)) > 0) {
+                int n = atoi(lines_buf);
+                if (n > 0 && n <= 100) num_lines = n;
+            }
+            int total = (int)web_log_get_total_count();
+            int available = web_log_get_count();
+            size_t buf_size = (size_t)(num_lines * 280);
+            if (buf_size > 16384) buf_size = 16384;
+            char *log_buf = (char *)malloc(buf_size);
+            if (!log_buf) {
+                mg_http_reply(c, 500, "Content-Type: application/json\r\n", "{\"error\":\"out of memory\"}\n");
+            } else {
+                int copied = web_log_copy_recent(log_buf, buf_size, num_lines);
+                DynamicJsonDocument doc(buf_size + 512);
+                doc["total"] = total;
+                doc["available"] = available;
+                JsonArray arr = doc.createNestedArray("lines");
+                const char *p = log_buf;
+                const char *end = log_buf + copied;
+                while (p < end && arr.size() < (size_t)num_lines) {
+                    const char *nl = strchr(p, '\n');
+                    if (!nl) nl = end;
+                    size_t len = (size_t)(nl - p);
+                    while (len > 0 && (p[len - 1] == '\r' || p[len - 1] == '\n')) len--;
+                    if (len > 0) {
+                        String line(p, len);
+                        arr.add(line);
+                    }
+                    p = nl + (nl < end ? 1 : 0);
+                }
+                free(log_buf);
+                String json;
+                serializeJson(doc, json);
+                mg_http_reply(c, 200, "Content-Type: application/json\r\n", "%s\r\n", json.c_str());
+            }
+#else
+            mg_http_reply(c, 404, "Content-Type: application/json\r\n", "{\"error\":\"not available\"}\n");
+#endif
         } else {                                                                    // if everything else fails, serve static page
             // Cache ".webp" or ".ico" image files for one year without revalidation or server checks.
             if (mg_match(hm->uri, mg_str("#.webp"), NULL) ||
@@ -2102,7 +2152,11 @@ void network_loop() {
         time(&now);                     // get seconds since Epoch
         localtime_r(&now, &timeinfo);   // convert seconds to localtime
         if (!LocalTimeSet && WIFImode == 1) {
-            _LOG_A("Time not synced with NTP yet.\n");
+            static unsigned long lastNtpLog = 0;
+            if (lastNtpLog == 0 || (millis() - lastNtpLog >= 60000)) {
+                lastNtpLog = millis();
+                _LOG_A("Time not synced with NTP yet.\n");
+            }
         }
     }
 

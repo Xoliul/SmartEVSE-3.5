@@ -41,28 +41,73 @@
 #define _LOG_I( ... ) //dummy
 #define _LOG_D( ... ) //dummy
 #define _LOG_V( ... ) //dummy
+#if defined(SMARTEVSE_VERSION)
+#include "web_log.h"
+#define _LOG_A(fmt, ...) do { if (web_log_subscriber_active()) web_log_append('A', __func__, fmt, ##__VA_ARGS__); } while(0)
+#define _LOG_A_NO_FUNC(fmt, ...) do { if (web_log_subscriber_active()) web_log_append('A', NULL, fmt, ##__VA_ARGS__); } while(0)
+#define _LOG_I(fmt, ...) do { if (web_log_subscriber_active()) web_log_append('I', __func__, fmt, ##__VA_ARGS__); } while(0)
+#define _LOG_I_NO_FUNC(fmt, ...) do { if (web_log_subscriber_active()) web_log_append('I', NULL, fmt, ##__VA_ARGS__); } while(0)
+#define _LOG_W(fmt, ...) do { if (web_log_subscriber_active()) web_log_append('W', __func__, fmt, ##__VA_ARGS__); } while(0)
+#define _LOG_W_NO_FUNC(fmt, ...) do { if (web_log_subscriber_active()) web_log_append('W', NULL, fmt, ##__VA_ARGS__); } while(0)
+#define _LOG_D(fmt, ...) do { if (web_log_subscriber_active()) web_log_append('D', __func__, fmt, ##__VA_ARGS__); } while(0)
+#define _LOG_D_NO_FUNC(fmt, ...) do { if (web_log_subscriber_active()) web_log_append('D', NULL, fmt, ##__VA_ARGS__); } while(0)
+#define _LOG_V(fmt, ...) do { if (web_log_subscriber_active()) web_log_append('V', __func__, fmt, ##__VA_ARGS__); } while(0)
+#define _LOG_V_NO_FUNC(fmt, ...) do { if (web_log_subscriber_active()) web_log_append('V', NULL, fmt, ##__VA_ARGS__); } while(0)
+#else
 #define _LOG_A( ... ) //dummy
+#define _LOG_A_NO_FUNC( ... ) //dummy
+#endif
 #define _LOG_W_NO_FUNC( ... ) //dummy
 #define _LOG_I_NO_FUNC( ... ) //dummy
 #define _LOG_D_NO_FUNC( ... ) //dummy
 #define _LOG_V_NO_FUNC( ... ) //dummy
-#define _LOG_A_NO_FUNC( ... ) //dummy
 #endif
 
 #if DBG == 1 && defined(SMARTEVSE_VERSION) //only on ESP32
-#define _LOG_A(fmt, ...) if (Debug.isActive(Debug.ANY))                Debug.printf("(%s)(C%d) " fmt, __func__, xPortGetCoreID(), ##__VA_ARGS__) //Always = Errors!!!
+#include "web_log.h"
+#define _LOG_A(fmt, ...) do { \
+    if (Debug.isActive(Debug.ANY))                Debug.printf("(%s)(C%d) " fmt, __func__, xPortGetCoreID(), ##__VA_ARGS__); \
+    if (web_log_subscriber_active())             web_log_append('A', __func__, fmt, ##__VA_ARGS__); \
+} while(0)
 #define _LOG_P(fmt, ...) if (Debug.isActive(Debug.PROFILER))   Debug.printf("(%s)(C%d) " fmt, __func__, xPortGetCoreID(), ##__VA_ARGS__)
-#define _LOG_V(fmt, ...) if (Debug.isActive(Debug.VERBOSE))    Debug.printf("(%s)(C%d) " fmt, __func__, xPortGetCoreID(), ##__VA_ARGS__)         //Verbose
-#define _LOG_D(fmt, ...) if (Debug.isActive(Debug.DEBUG))              Debug.printf("(%s)(C%d) " fmt, __func__, xPortGetCoreID(), ##__VA_ARGS__) //Debug
-#define _LOG_I(fmt, ...) if (Debug.isActive(Debug.INFO))               Debug.printf("(%s)(C%d) " fmt, __func__, xPortGetCoreID(), ##__VA_ARGS__) //Info
-#define _LOG_W(fmt, ...) if (Debug.isActive(Debug.WARNING))    Debug.printf("(%s)(C%d) " fmt, __func__, xPortGetCoreID(), ##__VA_ARGS__)         //Warning
+#define _LOG_V(fmt, ...) do { \
+    if (Debug.isActive(Debug.VERBOSE))    Debug.printf("(%s)(C%d) " fmt, __func__, xPortGetCoreID(), ##__VA_ARGS__); \
+    if (web_log_subscriber_active())      web_log_append('V', __func__, fmt, ##__VA_ARGS__); \
+} while(0)
+#define _LOG_D(fmt, ...) do { \
+    if (Debug.isActive(Debug.DEBUG))      Debug.printf("(%s)(C%d) " fmt, __func__, xPortGetCoreID(), ##__VA_ARGS__); \
+    if (web_log_subscriber_active())      web_log_append('D', __func__, fmt, ##__VA_ARGS__); \
+} while(0)
+#define _LOG_I(fmt, ...) do { \
+    if (Debug.isActive(Debug.INFO))               Debug.printf("(%s)(C%d) " fmt, __func__, xPortGetCoreID(), ##__VA_ARGS__); \
+    if (web_log_subscriber_active())             web_log_append('I', __func__, fmt, ##__VA_ARGS__); \
+} while(0)
+#define _LOG_W(fmt, ...) do { \
+    if (Debug.isActive(Debug.WARNING))    Debug.printf("(%s)(C%d) " fmt, __func__, xPortGetCoreID(), ##__VA_ARGS__); \
+    if (web_log_subscriber_active())     web_log_append('W', __func__, fmt, ##__VA_ARGS__); \
+} while(0)
 #define _LOG_E(fmt, ...) if (Debug.isActive(Debug.ERROR))              Debug.printf("(%s)(C%d) " fmt, __func__, xPortGetCoreID(), ##__VA_ARGS__) //Error not used!
-#define _LOG_A_NO_FUNC(fmt, ...) if (Debug.isActive(Debug.ANY))                Debug.printf(fmt, ##__VA_ARGS__)
+#define _LOG_A_NO_FUNC(fmt, ...) do { \
+    if (Debug.isActive(Debug.ANY))                Debug.printf(fmt, ##__VA_ARGS__); \
+    if (web_log_subscriber_active())             web_log_append('A', NULL, fmt, ##__VA_ARGS__); \
+} while(0)
 #define _LOG_P_NO_FUNC(fmt, ...) if (Debug.isActive(Debug.PROFILER))   Debug.printf(fmt, ##__VA_ARGS__)
-#define _LOG_V_NO_FUNC(fmt, ...) if (Debug.isActive(Debug.VERBOSE))    Debug.printf(fmt, ##__VA_ARGS__)
-#define _LOG_D_NO_FUNC(fmt, ...) if (Debug.isActive(Debug.DEBUG))              Debug.printf(fmt, ##__VA_ARGS__)
-#define _LOG_I_NO_FUNC(fmt, ...) if (Debug.isActive(Debug.INFO))               Debug.printf(fmt, ##__VA_ARGS__)
-#define _LOG_W_NO_FUNC(fmt, ...) if (Debug.isActive(Debug.WARNING))    Debug.printf(fmt, ##__VA_ARGS__)
+#define _LOG_V_NO_FUNC(fmt, ...) do { \
+    if (Debug.isActive(Debug.VERBOSE))    Debug.printf(fmt, ##__VA_ARGS__); \
+    if (web_log_subscriber_active())      web_log_append('V', NULL, fmt, ##__VA_ARGS__); \
+} while(0)
+#define _LOG_D_NO_FUNC(fmt, ...) do { \
+    if (Debug.isActive(Debug.DEBUG))      Debug.printf(fmt, ##__VA_ARGS__); \
+    if (web_log_subscriber_active())      web_log_append('D', NULL, fmt, ##__VA_ARGS__); \
+} while(0)
+#define _LOG_I_NO_FUNC(fmt, ...) do { \
+    if (Debug.isActive(Debug.INFO))               Debug.printf(fmt, ##__VA_ARGS__); \
+    if (web_log_subscriber_active())             web_log_append('I', NULL, fmt, ##__VA_ARGS__); \
+} while(0)
+#define _LOG_W_NO_FUNC(fmt, ...) do { \
+    if (Debug.isActive(Debug.WARNING))    Debug.printf(fmt, ##__VA_ARGS__); \
+    if (web_log_subscriber_active())     web_log_append('W', NULL, fmt, ##__VA_ARGS__); \
+} while(0)
 #define _LOG_E_NO_FUNC(fmt, ...) if (Debug.isActive(Debug.ERROR))              Debug.printf(fmt, ##__VA_ARGS__)
 #include "RemoteDebug.h"  //https://github.com/JoaoLopesF/RemoteDebug
 extern RemoteDebug Debug;
@@ -72,37 +117,53 @@ extern RemoteDebug Debug;
 
 #if DBG == 2 && defined(SMARTEVSE_VERSION) //only on ESP32
 #define DEBUG_DISABLED 1
+#include "web_log.h"
 #if LOG_LEVEL >= 1  // Errors
-#define _LOG_A(fmt, ... ) Serial.printf(EVSE_LOG_FORMAT(E, fmt), ##__VA_ARGS__)
-#define _LOG_A_NO_FUNC( ... ) Serial.printf ( __VA_ARGS__ )
+#define _LOG_A(fmt, ...) do { \
+    Serial.printf(EVSE_LOG_FORMAT(E, fmt), ##__VA_ARGS__); \
+    if (web_log_subscriber_active()) web_log_append('A', __func__, fmt, ##__VA_ARGS__); \
+} while(0)
+#define _LOG_A_NO_FUNC( ... ) do { Serial.printf ( __VA_ARGS__ ); if (web_log_subscriber_active()) web_log_append('A', NULL, __VA_ARGS__); } while(0)
 #else
 #define _LOG_A( ... )
 #define _LOG_A_NO_FUNC( ... )
 #endif
 #if LOG_LEVEL >= 2  // Warnings
-#define _LOG_W(fmt, ... ) Serial.printf(EVSE_LOG_FORMAT(W, fmt), ##__VA_ARGS__)
-#define _LOG_W_NO_FUNC( ... ) Serial.printf ( __VA_ARGS__ )
+#define _LOG_W(fmt, ... ) do { \
+    Serial.printf(EVSE_LOG_FORMAT(W, fmt), ##__VA_ARGS__); \
+    if (web_log_subscriber_active()) web_log_append('W', __func__, fmt, ##__VA_ARGS__); \
+} while(0)
+#define _LOG_W_NO_FUNC( ... ) do { Serial.printf ( __VA_ARGS__ ); if (web_log_subscriber_active()) web_log_append('W', NULL, __VA_ARGS__); } while(0)
 #else
 #define _LOG_W( ... ) 
 #define _LOG_W_NO_FUNC( ... )
 #endif
 #if LOG_LEVEL >= 3  // Info
-#define _LOG_I(fmt, ... ) Serial.printf(EVSE_LOG_FORMAT(I, fmt), ##__VA_ARGS__)
-#define _LOG_I_NO_FUNC( ... ) Serial.printf ( __VA_ARGS__ )
+#define _LOG_I(fmt, ... ) do { \
+    Serial.printf(EVSE_LOG_FORMAT(I, fmt), ##__VA_ARGS__); \
+    if (web_log_subscriber_active()) web_log_append('I', __func__, fmt, ##__VA_ARGS__); \
+} while(0)
+#define _LOG_I_NO_FUNC( ... ) do { Serial.printf ( __VA_ARGS__ ); if (web_log_subscriber_active()) web_log_append('I', NULL, __VA_ARGS__); } while(0)
 #else
 #define _LOG_I( ... )
 #define _LOG_I_NO_FUNC( ... )
 #endif
 #if LOG_LEVEL >= 4  // Debug
-#define _LOG_D(fmt, ... ) Serial.printf(EVSE_LOG_FORMAT(D, fmt), ##__VA_ARGS__)
-#define _LOG_D_NO_FUNC( ... ) Serial.printf ( __VA_ARGS__ )
+#define _LOG_D(fmt, ... ) do { \
+    Serial.printf(EVSE_LOG_FORMAT(D, fmt), ##__VA_ARGS__); \
+    if (web_log_subscriber_active()) web_log_append('D', __func__, fmt, ##__VA_ARGS__); \
+} while(0)
+#define _LOG_D_NO_FUNC( ... ) do { Serial.printf ( __VA_ARGS__ ); if (web_log_subscriber_active()) web_log_append('D', NULL, __VA_ARGS__); } while(0)
 #else
 #define _LOG_D( ... ) 
 #define _LOG_D_NO_FUNC( ... )
 #endif
 #if LOG_LEVEL >= 5  // Verbose
-#define _LOG_V(fmt, ... ) Serial.printf(EVSE_LOG_FORMAT(V, fmt), ##__VA_ARGS__)
-#define _LOG_V_NO_FUNC( ... ) Serial.printf ( __VA_ARGS__ )
+#define _LOG_V(fmt, ... ) do { \
+    Serial.printf(EVSE_LOG_FORMAT(V, fmt), ##__VA_ARGS__); \
+    if (web_log_subscriber_active()) web_log_append('V', __func__, fmt, ##__VA_ARGS__); \
+} while(0)
+#define _LOG_V_NO_FUNC( ... ) do { Serial.printf ( __VA_ARGS__ ); if (web_log_subscriber_active()) web_log_append('V', NULL, __VA_ARGS__); } while(0)
 #else
 #define _LOG_V( ... ) 
 #define _LOG_V_NO_FUNC( ... )

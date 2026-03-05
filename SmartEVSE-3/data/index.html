@@ -54,6 +54,7 @@
       let mqttEditMode = false;
       let ocppEditMode = false;
       let last_evse_state_id=0;
+      let evseFormDirty = false;  // true after user edits EVSE config / solar / override; cleared on save
 
       $(document).ready(loadData);
 
@@ -76,7 +77,7 @@
               url: endpoint
           }).then(function(data) {
             var isFirstLoad = !initiated;
-            var applyToForm = isFirstLoad || applyFormValues;
+            var applyToForm = (isFirstLoad || applyFormValues) && !evseFormDirty;
             if(!initiated) {
               initiated = true;
               // Set the text and the data-version attribute dynamically
@@ -437,12 +438,102 @@
             // After first load, re-run once so jQuery Mobile–enhanced widgets (selectmenu, checkboxradio, textinput) show correct values
             if (isFirstLoad) setTimeout(function() { loadData(true); }, 400);
 
-            setTimeout("loadData()", 5000);
+            // Poll: display-only update so we never overwrite user's form edits
+            setTimeout(pollDisplay, 5000);
           });
+      }
+
+      function pollDisplay() {
+        $.ajax({ url: endpoint }).then(function(data) {
+          updateDisplayOnly(data);
+          setTimeout(pollDisplay, 5000);
+        });
+      }
+
+      function updateDisplayOnly(data) {
+        if (!data) return;
+        $qs('#mode').textContent = data.mode || '';
+        for (var x = 0; x <= 4; x++) {
+          var el = $qs('#mode_' + x);
+          if (el) el.classList.toggle('ui-btn-active', x === data.mode_id);
+        }
+        $('#dutycycle').text((data.evse && data.evse.pwm != null) ? (data.evse.pwm*100/1024).toFixed(0) + " %" : "");
+        if (data.mode_id == 2) {
+          $('.with_solar').show();
+          $('[id=override_current_box]').hide();
+          $('[id=override_current_box2]').hide();
+        } else {
+          $('.with_solar').hide();
+          $('[id=override_current_box]').show();
+          $('[id=override_current_box2]').show();
+        }
+        if (data.ev_state) {
+          var full_soc = data.ev_state.full_soc, initial_soc = data.ev_state.initial_soc, computed_soc = data.ev_state.computed_soc;
+          var time_until_full = data.ev_state.time_until_full, energy_capacity = data.ev_state.energy_capacity, evccid = data.ev_state.evccid;
+          $('#computed_soc').html(computed_soc >= 0 ? computed_soc + " &#37;" : "N/A");
+          $('#full_soc').html(full_soc >= 0 ? full_soc + " &#37;" : "N/A");
+          $('#initial_soc').html(initial_soc >= 0 ? initial_soc + " &#37;" : "N/A");
+          $('#energy_capacity').html(energy_capacity >= 0 ? (energy_capacity/1000).toFixed(1) + " kWh" : "N/A");
+          $('#evccid').html(evccid || "N/A");
+          $('#full_at').text(time_until_full > 0 ? new Date(+Date.now()+(time_until_full * 1000)).toLocaleString(undefined, { timeStyle: 'short', dateStyle: "short" }) : 'N/A').attr('title', time_until_full > 0 ? Math.round(time_until_full / 60) + ' min to go' : 'N/A');
+        }
+        if (data.mqtt) {
+          $('#mqtt').text(data.mqtt.status || 'N/A').show();
+          $('#mqtt_config').show();
+        } else {
+          $('#mqtt').text('').hide();
+        }
+        if (data.evse && data.evse.loadbl > 1) {
+          $('[id=loadbl]').show();
+          $('[id=loadbl_text]').show();
+          $('[id=loadbl_node]').text("Slave Node " + (data.evse.loadbl - 1));
+          $('[id=override_current_box]').hide();
+          $('[id=override_current_box2]').hide();
+        } else if (data.evse && data.evse.loadbl == 1) {
+          $('[id=loadbl]').show();
+          $('[id=loadbl_text]').show();
+          $('[id=loadbl_node]').text("Master");
+        } else if (data.evse) {
+          $('[id=loadbl]').hide();
+          $('[id=loadbl_text]').hide();
+        }
+        $('#car_connected').text(data.car_connected ? "Yes" : "No");
+        $('#state').text(data.evse ? (data.evse.state + (data.evse.solar_stop_timer > 0 ? " (Stopping in " + data.evse.solar_stop_timer + "s)" : "")) : '');
+        if (data.evse && data.evse.error != "None") {
+          $('#error').text(data.evse.error);
+          $('[id=with_errors]').show();
+        } else {
+          $('[id=with_errors]').hide();
+        }
+        $('#temp').text(data.evse ? (data.evse.temp + " °C / " + data.evse.temp_max + " °C") : '');
+        if (data.settings) {
+          $('#current_min').text(data.settings.current_min != null ? data.settings.current_min.toFixed(1) + " A" : '');
+          $('#current_max').text(data.settings.current_max != null ? data.settings.current_max.toFixed(1) + " A" : '');
+          $('#override_current').text(data.settings.override_current != null ? (data.settings.override_current/10).toFixed(1) + " A" : '');
+          $('#enable_C2').text(data.settings.enable_C2 || '');
+          $('#charge_current').text(data.settings.charge_current != null ? (data.settings.charge_current/10).toFixed(1) + " A" : '');
+        }
+        if (data.phase_currents) {
+          $('#phase_total').text((data.phase_currents.TOTAL/10).toFixed(1) + " A");
+          $('#phase_1').text((data.phase_currents.L1/10).toFixed(1) + " A");
+          $('#phase_2').text((data.phase_currents.L2/10).toFixed(1) + " A");
+          $('#phase_3').text((data.phase_currents.L3/10).toFixed(1) + " A");
+        }
+        if (data.ev_meter && data.ev_meter.currents) {
+          $('#evmeter_currents_total').text((data.ev_meter.currents.TOTAL/10).toFixed(1) + " A");
+          $('#evmeter_currents_1').text((data.ev_meter.currents.L1/10).toFixed(1) + " A");
+          $('#evmeter_currents_2').text((data.ev_meter.currents.L2/10).toFixed(1) + " A");
+          $('#evmeter_currents_3').text((data.ev_meter.currents.L3/10).toFixed(1) + " A");
+        }
       }
 
       // Add event listener for TLS checkbox
       $(document).on('change', '#mqtt_tls', toggleCertVisibility);
+
+      // Mark EVSE config / solar / override as dirty when user edits (so poll never overwrites)
+      $(document).on('change input', '#evse_config_section select, #evse_config_section input, #solar_start_current, #solar_max_import_current, #solar_stop_time, #mode_override_current', function() {
+        evseFormDirty = true;
+      });
   </script>
 
 
@@ -1467,7 +1558,7 @@
                       add("lcd_pin", "evse_config_lcd_pin");
                       add("app_server", "evse_config_app_server", true);
                       if (params.length === 0) return;
-                      $.post("/settings?" + params.join("&")).then(function() { loadData(true); alert("EVSE configuration saved."); }).fail(function() { alert("Save failed."); });
+                      $.post("/settings?" + params.join("&")).then(function() { evseFormDirty = false; loadData(true); alert("EVSE configuration saved."); }).fail(function() { alert("Save failed."); });
                     }
                     function toggleEnableOcpp() {
                       var enableOcppCheckbox = document.getElementById("enable_ocpp");
