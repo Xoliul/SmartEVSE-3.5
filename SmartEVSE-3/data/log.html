@@ -20,6 +20,8 @@
     #filterBar .filter-btn.D { border-color: #ce9178; color: #ce9178; }
     #filterBar .filter-btn.V { border-color: #808080; color: #808080; }
     #filterBar .filter-btn.other { border-color: #d4d4d4; color: #d4d4d4; }
+    #topicFilter { margin-left: 8px; padding: 4px 8px; border-radius: 4px; border: 1px solid #555; background: #333; color: #d4d4d4; font-family: inherit; font-size: 12px; min-width: 12em; }
+    #topicFilter::placeholder { color: #808080; }
     #log { white-space: pre-wrap; word-break: break-all; padding: 8px; background: #252526; border-radius: 4px; max-height: 70vh; overflow-y: auto; }
     .line { margin: 2px 0; }
     .log-A, .log-E { color: #f48771; }
@@ -35,6 +37,7 @@
   <h1>SmartEVSE log</h1>
   <div id="toolbar">
     <div id="filterBar"></div>
+    <input type="text" id="topicFilter" placeholder="Filter by text…" title="Show only lines containing this text (empty = no filter)">
     <label>Poll every <input type="number" id="interval" value="3" min="1" max="60" style="width:3em"> s</label>
     <span id="status" style="margin-left:0.5em"></span>
   </div>
@@ -44,13 +47,19 @@
     (function() {
       const LOG_LEVELS = ['A', 'E', 'W', 'I', 'D', 'V'];
       const STORAGE_KEY = 'smartevse_log_filter';
+      const STORAGE_KEY_TOPIC = 'smartevse_log_topic_filter';
+      const MAX_ROLLED_OFF = 500;  // frontend-only buffer: lines that rolled off server
       const logEl = document.getElementById('log');
       const statusEl = document.getElementById('status');
       const filterBarEl = document.getElementById('filterBar');
       const intervalInput = document.getElementById('interval');
+      const topicFilterInput = document.getElementById('topicFilter');
       let pollTimer = null;
       let filterEnabled = {}; // level -> true/false
+      let topicFilter = '';
       let levelsSeen = new Set(LOG_LEVELS.concat(['other']));
+      /** Lines that have rolled off the server buffer; kept so filtered view doesn't go empty. */
+      let rolledOffBuffer = [];
 
       function loadFilter() {
         try {
@@ -69,6 +78,17 @@
       function saveFilter() {
         try {
           localStorage.setItem(STORAGE_KEY, JSON.stringify(filterEnabled));
+          localStorage.setItem(STORAGE_KEY_TOPIC, topicFilter);
+        } catch (e) {}
+      }
+
+      function loadTopicFilter() {
+        try {
+          const s = localStorage.getItem(STORAGE_KEY_TOPIC);
+          if (s != null) {
+            topicFilter = String(s);
+            topicFilterInput.value = topicFilter;
+          }
         } catch (e) {}
       }
 
@@ -90,7 +110,7 @@
             filterEnabled[level] = cb.checked;
             saveFilter();
             updateAllCheckbox();
-            renderLines(currentLines);
+            renderLines(getAllLines());
           });
           label.appendChild(cb);
           const span = document.createElement('span');
@@ -111,7 +131,7 @@
             filterBarEl.querySelectorAll('input[type="checkbox"][data-level]').forEach(function(c) {
             if (c !== allCb) c.checked = on;
           });
-          renderLines(currentLines);
+          renderLines(getAllLines());
         });
         allLabel.appendChild(allCb);
         const allSpan = document.createElement('span');
@@ -134,11 +154,19 @@
 
       let currentLines = [];
 
+      /** Full list to render from: rolled-off lines + current server tail. */
+      function getAllLines() {
+        return rolledOffBuffer.concat(currentLines);
+      }
+
       function renderLines(lines) {
         logEl.innerHTML = '';
+        const topic = topicFilter.trim().toLowerCase();
+        const hasTopicFilter = topic.length > 0;
         lines.forEach(function(line) {
           const level = levelFromLine(line);
           if (filterEnabled[level] === false) return;
+          if (hasTopicFilter && line.toLowerCase().indexOf(topic) === -1) return;
           const div = document.createElement('div');
           div.className = 'line log-' + (LOG_LEVELS.indexOf(level) >= 0 ? level : 'unknown');
           div.textContent = line;
@@ -153,13 +181,20 @@
           .then(function(data) {
             statusEl.textContent = 'total: ' + (data.total || 0) + ' | available: ' + (data.available || 0);
             const arr = data.lines || [];
+            if (currentLines.length > 0) {
+              const newSet = new Set(arr);
+              currentLines.forEach(function(line) {
+                if (!newSet.has(line)) rolledOffBuffer.push(line);
+              });
+              rolledOffBuffer = rolledOffBuffer.slice(-MAX_ROLLED_OFF);
+            }
             currentLines = arr;
             arr.forEach(function(line) {
               levelsSeen.add(levelFromLine(line));
             });
             if (filterBarEl.children.length === 0) buildFilterBar();
             else if (levelsSeen.size > filterBarEl.querySelectorAll('[data-level]').length) buildFilterBar();
-            renderLines(currentLines);
+            renderLines(getAllLines());
           })
           .catch(function() {
             statusEl.textContent = 'Not available (open this page to start logging).';
@@ -176,6 +211,21 @@
       }
 
       loadFilter();
+      loadTopicFilter();
+      topicFilterInput.addEventListener('input', function() {
+        topicFilter = topicFilterInput.value;
+        saveFilter();
+        renderLines(getAllLines());
+      });
+      topicFilterInput.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') {
+          topicFilterInput.value = '';
+          topicFilter = '';
+          saveFilter();
+          renderLines(getAllLines());
+          topicFilterInput.blur();
+        }
+      });
       intervalInput.addEventListener('change', startPolling);
       startPolling();
     })();

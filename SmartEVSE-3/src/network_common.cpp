@@ -10,6 +10,7 @@
 #include "glcd.h"
 #include "esp32.h"
 #include <ArduinoJson.h>
+#include "debug.h"
 
 #include <HTTPClient.h>
 #include <ESPmDNS.h>
@@ -128,21 +129,56 @@ void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event
     switch ((esp_mqtt_event_id_t)event_id) {
     case MQTT_EVENT_CONNECTED:
         MQTTclient.connected = true;
+        _LOG_I("MQTT connected, subscribing...");
         SetupMQTTClient();
         break;
     case MQTT_EVENT_DISCONNECTED:
         MQTTclient.connected = false;
         break;
+    case MQTT_EVENT_SUBSCRIBED:
+        _LOG_I("MQTT subscribed; msg_id=%d", event->msg_id);
+        if (event->error_handle && event->error_handle->error_type != MQTT_ERROR_TYPE_NONE) {
+            _LOG_I("MQTT subscribe error: type=%d", event->error_handle->error_type);
+        }
+        break;
     case MQTT_EVENT_DATA:
         {
         String topic2 = String(event->topic).substring(0,event->topic_len);
         String payload2 = String(event->data).substring(0,event->data_len);
-        //_LOG_A("Received MQTT EVENT DATA: topic=%s, payload=%s.\n", topic2.c_str(), payload2.c_str());
+        if (topic2.indexOf("/Set/MainsMeter") >= 0 || topic2.indexOf("/Set/EVMeter") >= 0 ||
+            topic2.indexOf("/Set/MaxCurrent") >= 0 || topic2.indexOf("/Set/SolarMeter") >= 0 ||
+            topic2.indexOf("/set/MaxCurrent") >= 0)  // also log lowercase 'set' for debugging
+            _LOG_I("MQTT received: topic=%s payload=%s", topic2.c_str(), payload2.c_str());
         mqtt_receive_callback(topic2, payload2);
         }
         break;
     case MQTT_EVENT_ERROR:
-        _LOG_I("MQTT_EVENT_ERROR; Last errno string (%s)", strerror(event->error_handle->esp_transport_sock_errno));
+        if (event->error_handle) {
+            switch (event->error_handle->error_type) {
+                case MQTT_ERROR_TYPE_TCP_TRANSPORT:
+                    _LOG_I("MQTT_EVENT_ERROR: TCP transport; sock_errno=%s, esp_err=0x%x",
+                           strerror(event->error_handle->esp_transport_sock_errno),
+                           (unsigned)event->error_handle->esp_tls_last_esp_err);
+                    break;
+                case MQTT_ERROR_TYPE_CONNECTION_REFUSED:
+                    _LOG_I("MQTT_EVENT_ERROR: Connection refused by broker; code=%d (%s)",
+                           event->error_handle->connect_return_code,
+                           event->error_handle->connect_return_code == MQTT_CONNECTION_REFUSE_PROTOCOL ? "wrong protocol" :
+                           event->error_handle->connect_return_code == MQTT_CONNECTION_REFUSE_ID_REJECTED ? "ID rejected" :
+                           event->error_handle->connect_return_code == MQTT_CONNECTION_REFUSE_SERVER_UNAVAILABLE ? "server unavailable" :
+                           event->error_handle->connect_return_code == MQTT_CONNECTION_REFUSE_BAD_USERNAME ? "bad username" :
+                           event->error_handle->connect_return_code == MQTT_CONNECTION_REFUSE_NOT_AUTHORIZED ? "not authorized" : "unknown");
+                    break;
+                default:
+                    _LOG_I("MQTT_EVENT_ERROR: type=%d, esp_err=0x%x, sock_errno=%s",
+                           event->error_handle->error_type,
+                           (unsigned)event->error_handle->esp_tls_last_esp_err,
+                           strerror(event->error_handle->esp_transport_sock_errno));
+                    break;
+            }
+        } else {
+            _LOG_I("MQTT_EVENT_ERROR: no error_handle");
+        }
         break;
     default:
         break;
@@ -228,8 +264,17 @@ void MQTTclient_t::subscribe(const String &topic, int qos) {
         mg_mqtt_sub(s_conn, &opts);
     }
 #else
-    if (connected && client)
-        esp_mqtt_client_subscribe(client, topic.c_str(), qos);
+    if (connected && client) {
+        int r = esp_mqtt_client_subscribe(client, topic.c_str(), qos);
+        if (r >= 0)
+            _LOG_I("MQTT subscribe '%s' -> msg_id=%d", topic.c_str(), r);
+        else if (r == -1)
+            _LOG_I("MQTT subscribe '%s' FAILED (error)", topic.c_str());
+        else if (r == -2)
+            _LOG_I("MQTT subscribe '%s' FAILED (outbox full)", topic.c_str());
+    } else {
+        _LOG_I("MQTT subscribe '%s' skipped (not connected)", topic.c_str());
+    }
 #endif
 }
 
@@ -290,6 +335,12 @@ void mqtt_smartevse_event_handler(void *handler_args, esp_event_base_t base, int
         MQTTclientSmartEVSE_AppConnected = false;
         _LOG_I("SmartEVSE MQTT server disconnected.\n");
         break;
+    case MQTT_EVENT_SUBSCRIBED:
+        _LOG_I("SmartEVSE MQTT subscribed; msg_id=%d", event->msg_id);
+        if (event->error_handle && event->error_handle->error_type != MQTT_ERROR_TYPE_NONE) {
+            _LOG_I("SmartEVSE MQTT subscribe error: type=%d", event->error_handle->error_type);
+        }
+        break;
     case MQTT_EVENT_DATA:
         {
         String topic = String(event->topic).substring(0, event->topic_len);
@@ -316,7 +367,26 @@ void mqtt_smartevse_event_handler(void *handler_args, esp_event_base_t base, int
         }
         break;
     case MQTT_EVENT_ERROR:
-        _LOG_I("SmartEVSE MQTT_EVENT_ERROR; Last errno string (%s)", strerror(event->error_handle->esp_transport_sock_errno));
+        if (event->error_handle) {
+            switch (event->error_handle->error_type) {
+                case MQTT_ERROR_TYPE_TCP_TRANSPORT:
+                    _LOG_I("SmartEVSE MQTT_EVENT_ERROR: TCP transport; sock_errno=%s, esp_err=0x%x",
+                           strerror(event->error_handle->esp_transport_sock_errno),
+                           (unsigned)event->error_handle->esp_tls_last_esp_err);
+                    break;
+                case MQTT_ERROR_TYPE_CONNECTION_REFUSED:
+                    _LOG_I("SmartEVSE MQTT_EVENT_ERROR: Connection refused; code=%d",
+                           event->error_handle->connect_return_code);
+                    break;
+                default:
+                    _LOG_I("SmartEVSE MQTT_EVENT_ERROR: type=%d, esp_err=0x%x",
+                           event->error_handle->error_type,
+                           (unsigned)event->error_handle->esp_tls_last_esp_err);
+                    break;
+            }
+        } else {
+            _LOG_I("SmartEVSE MQTT_EVENT_ERROR: no error_handle");
+        }
         break;
     default:
         break;
@@ -385,8 +455,17 @@ void MQTTclientSmartEVSE_t::publish(const String &topic, const String &payload, 
 }
 
 void MQTTclientSmartEVSE_t::subscribe(const String &topic, int qos) {
-    if (connected && client)
-        esp_mqtt_client_subscribe(client, topic.c_str(), qos);
+    if (connected && client) {
+        int r = esp_mqtt_client_subscribe(client, topic.c_str(), qos);
+        if (r >= 0)
+            _LOG_I("SmartEVSE MQTT subscribe '%s' -> msg_id=%d", topic.c_str(), r);
+        else if (r == -1)
+            _LOG_I("SmartEVSE MQTT subscribe '%s' FAILED (error)", topic.c_str());
+        else if (r == -2)
+            _LOG_I("SmartEVSE MQTT subscribe '%s' FAILED (outbox full)", topic.c_str());
+    } else {
+        _LOG_I("SmartEVSE MQTT subscribe '%s' skipped (not connected)", topic.c_str());
+    }
 }
 #endif  // SENSORBOX_VERSION
 
@@ -1101,6 +1180,115 @@ return {phases, currents};
 }
 #endif
 
+// Home Assistant connection test (used when SENSORBOX_VERSION is set too, so outside #ifndef SENSORBOX_VERSION)
+#if defined(ESP32)
+// Build URL per HA REST API doc: http://IP_ADDRESS:8123/api/ with Authorization: Bearer TOKEN
+static String buildHAUrl(const char* serverUrl, uint16_t port, const char* path) {
+    String host = String(serverUrl);
+    host.trim();
+    if (host.startsWith("http://")) host = host.substring(7);
+    else if (host.startsWith("https://")) host = host.substring(8);
+    if (host.endsWith("/")) host.remove(host.length() - 1);
+    return String("http://") + host + ":" + String(port) + path;
+}
+// Trim leading/trailing whitespace from token (paste often adds newline)
+static void trimToken(char* token, size_t maxLen) {
+    if (!token || maxLen == 0) return;
+    String s = String(token);
+    s.trim();
+    strncpy(token, s.c_str(), maxLen - 1);
+    token[maxLen - 1] = '\0';
+}
+
+int testHomeAssistantConnection(const char* serverUrl, uint16_t port, const char* token) {
+    if (!serverUrl || serverUrl[0] == '\0' || port == 0) {
+        _LOG_A("[homeassistant] test: missing server or port\n");
+        return 3;
+    }
+    char tokenBuf[HA_TOKEN_MAX_LEN];
+    strncpy(tokenBuf, token ? token : "", sizeof(tokenBuf) - 1);
+    tokenBuf[sizeof(tokenBuf) - 1] = '\0';
+    trimToken(tokenBuf, sizeof(tokenBuf));
+    if (tokenBuf[0] == '\0') {
+        _LOG_A("[homeassistant] test: token empty\n");
+        return 3;
+    }
+    String url = buildHAUrl(serverUrl, port, "/api/");
+    HTTPClient http;
+    http.setTimeout(5000);
+    if (!http.begin(url)) {
+        _LOG_A("[homeassistant] test: begin failed\n");
+        return 3;
+    }
+    http.addHeader("Authorization", String("Bearer ") + tokenBuf);
+    http.addHeader("Content-Type", "application/json");
+    int code = http.GET();
+    String body;
+    if (code != 200) body = http.getString();
+    http.end();
+    _LOG_A("[homeassistant] test: GET -> %d\n", code);
+    if (code != 200 && body.length() > 0 && body.length() < 200)
+        _LOG_A("[homeassistant] test: body %s\n", body.c_str());
+    if (code == HTTP_CODE_OK) return 0;
+    if (code == 401) {
+        _LOG_A("[homeassistant] test: 401 check token\n");
+        return 1;
+    }
+    if (code == 404) return 2;
+    return 3;
+}
+#else
+int testHomeAssistantConnection(const char* serverUrl, uint16_t port, const char* token) {
+    (void)serverUrl;
+    (void)port;
+    (void)token;
+    return 3;
+}
+#endif
+
+#if defined(ESP32)
+bool fetchHAEntityState(const char* serverUrl, uint16_t port, const char* token, const char* entityId, float* outValue) {
+    if (!serverUrl || serverUrl[0] == '\0' || port == 0 || !entityId || entityId[0] == '\0' || !outValue)
+        return false;
+    char tokenBuf[HA_TOKEN_MAX_LEN];
+    strncpy(tokenBuf, token ? token : "", sizeof(tokenBuf) - 1);
+    tokenBuf[sizeof(tokenBuf) - 1] = '\0';
+    trimToken(tokenBuf, sizeof(tokenBuf));
+    String url = buildHAUrl(serverUrl, port, "/api/states/");
+    url += entityId;
+    HTTPClient http;
+    http.setTimeout(5000);
+    if (!http.begin(url)) {
+        _LOG_A("[homeassistant] fetch: begin failed %s\n", entityId);
+        return false;
+    }
+    http.addHeader("Authorization", String("Bearer ") + tokenBuf);
+    http.addHeader("Content-Type", "application/json");
+    int code = http.GET();
+    if (code != HTTP_CODE_OK) {
+        _LOG_A("[homeassistant] fetch %s -> %d\n", entityId, code);
+        http.end();
+        return false;
+    }
+    WiFiClient *stream = http.getStreamPtr();
+    DynamicJsonDocument doc(512);
+    DeserializationError err = deserializeJson(doc, *stream);
+    http.end();
+    if (err || !doc.containsKey("state")) return false;
+    const char* stateStr = doc["state"].as<const char*>();
+    if (!stateStr) return false;
+    String s = stateStr;
+    s.trim();
+    float v = s.toFloat();
+    *outValue = v;
+    return true;
+}
+#else
+bool fetchHAEntityState(const char* serverUrl, uint16_t port, const char* token, const char* entityId, float* outValue) {
+    (void)serverUrl; (void)port; (void)token; (void)entityId; (void)outValue;
+    return false;
+}
+#endif
 
 void webServerRequest::setMessage(struct mg_http_message *hm) {
     hm_internal = hm;

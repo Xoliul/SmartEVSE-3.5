@@ -157,6 +157,12 @@ extern std::pair<int8_t, std::array<std::int16_t, 3>> getMainsFromHomeWizardP1()
 extern String homeWizardHost;
 #endif
 
+/** Test Home Assistant connection (Bearer token, GET /api/). Returns 0=OK, 1=401, 2=404, 3=error/timeout. */
+int testHomeAssistantConnection(const char* serverUrl, uint16_t port, const char* token);
+
+/** Fetch state of one HA entity (GET /api/states/<entity_id>). Parses "state" as float (decimal amps). Returns true and writes value to *outValue on success. */
+bool fetchHAEntityState(const char* serverUrl, uint16_t port, const char* token, const char* entityId, float* outValue);
+
 #define FW_DOWNLOAD_PATH "http://smartevse-3.s3.eu-west-2.amazonaws.com"
 
 #define OWNER_FACT "SmartEVSE"

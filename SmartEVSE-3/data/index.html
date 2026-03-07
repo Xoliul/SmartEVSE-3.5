@@ -40,6 +40,10 @@
     .tooltip:hover .tooltiptext {
       visibility: visible;
     }
+    /* Sub-settings under a parent (e.g. meter type) – indent to show hierarchy */
+    .evse-config-sub {
+      margin-left: 1.5rem;
+    }
   </style>
 </head>
 
@@ -270,6 +274,31 @@
               $('[id=with_p1_api_data_time]').hide();
             }
 
+            if (data.mode_id == 2) {
+              var solarVal, solarTs, solarSource;
+              if (data.solar_meter_source && data.solar_meter_source != 0) {
+                solarVal = (data.solar_meter_value || 0) / 10;
+                solarTs = data.solar_meter_last_update || 0;
+                solarSource = "Solar meter";
+              } else {
+                var total = (data.phase_currents && data.phase_currents.TOTAL !== undefined) ? data.phase_currents.TOTAL : 0;
+                solarVal = total < 0 ? (-total / 10) : 0;
+                solarTs = (data.phase_currents && data.phase_currents.last_data_update) || 0;
+                solarSource = "Grid export (chasing zero)";
+              }
+              $('#solar_current_value').text(solarVal.toFixed(1) + " A");
+              $('#solar_current_source').text(solarSource);
+              if (solarTs > 0) {
+                $('#solar_current_time').text(new Date(solarTs * 1000).toLocaleTimeString());
+                $('#solar_current_date').text(new Date(solarTs * 1000).toLocaleDateString());
+                $('[id=with_solar_current_date]').show();
+                $('[id=with_solar_current_time]').show();
+              } else {
+                $('[id=with_solar_current_date]').hide();
+                $('[id=with_solar_current_time]').hide();
+              }
+            }
+
             if(data.home_battery.last_update > 0) {
               $('#battery_last_update_time').text(new Date(data.home_battery.last_update * 1000).toLocaleTimeString());
               $('#battery_last_update_date').text(new Date(data.home_battery.last_update * 1000).toLocaleDateString());
@@ -311,6 +340,19 @@
             if (data.settings.lock !== undefined) $('#evse_config_lock').val(String(data.settings.lock));
             if (data.settings.current_max !== undefined) $('#evse_config_current_max').val(data.settings.current_max);
             if (data.settings.current_max_circuit !== undefined) $('#evse_config_current_max_circuit').val(data.settings.current_max_circuit);
+            if (data.max_current_source !== undefined) $('#max_current_source').val(String(data.max_current_source));
+            if (data.max_current_mqtt_topic !== undefined) $('#max_current_mqtt_topic').val(data.max_current_mqtt_topic || '');
+            if (data.max_current_ha_unit !== undefined) $('#max_current_ha_unit').val(String(data.max_current_ha_unit));
+            if (data.max_current_ha_entity !== undefined) $('#max_current_ha_entity').val(data.max_current_ha_entity || '');
+            if (data.ha && data.ha.mains_voltage !== undefined) {
+              $('#max_current_ha_voltage').val(data.ha.mains_voltage);
+            }
+            var maxCurHAUnit = (data.max_current_ha_unit !== undefined) ? parseInt(String(data.max_current_ha_unit), 10) : 0;
+            if (maxCurHAUnit === 1 || maxCurHAUnit === 2) $('#max_current_ha_voltage_row').show(); else $('#max_current_ha_voltage_row').hide();
+            var maxCurSrc = (data.max_current_source !== undefined) ? parseInt(String(data.max_current_source), 10) : 0;
+            if (maxCurSrc === 0) { $('#max_current_static_row').show(); $('#max_current_mqtt_row').hide(); $('#max_current_ha_row').hide(); $('#evse_config_current_max').prop('disabled', false); }
+            else if (maxCurSrc === 1) { $('#max_current_static_row').hide(); $('#max_current_mqtt_row').show(); $('#max_current_ha_row').hide(); $('#evse_config_current_max').prop('disabled', true); }
+            else { $('#max_current_static_row').hide(); $('#max_current_mqtt_row').hide(); $('#max_current_ha_row').show(); $('#evse_config_current_max').prop('disabled', true); }
             if (data.settings.current_main !== undefined) $('#evse_config_current_main').val(data.settings.current_main);
             if (data.evse.loadbl !== undefined) $('#evse_config_loadbl').val(String(data.evse.loadbl));
             if (data.settings.grid !== undefined) $('#evse_config_grid').val(String(data.settings.grid));
@@ -333,6 +375,28 @@
             if (data.evse.loadbl >= 2) $('#evse_config_master_only').find('select, input').prop('disabled', true);
             else $('#evse_config_master_only').find('select, input').prop('disabled', false);
             if (data.mqtt) $('#evse_config_app_server_row').show(); else $('#evse_config_app_server_row').hide();
+            if (data.ha) {
+              $('#ha_enabled').prop('checked', data.ha.enabled).checkboxradio('refresh');
+              $('#ha_server_url').val(data.ha.server_url || '');
+              $('#ha_port').val(data.ha.port !== undefined ? data.ha.port : 8123);
+              $('#ha_token').val(''); // never show token in UI (security)
+              $('#ha_token_saved_hint').toggle(!!data.ha.token_set);
+              $('#ha_refresh_interval').val(data.ha.refresh_interval !== undefined ? data.ha.refresh_interval : 10);
+              if (data.ha.mains_api_source !== undefined) $('#ha_mains_api_source').val(String(data.ha.mains_api_source));
+              if (data.ha.mains_unit !== undefined) $('#ha_mains_unit').val(String(data.ha.mains_unit));
+              var u = (data.ha && data.ha.mains_unit !== undefined) ? parseInt(data.ha.mains_unit, 10) : 0;
+              if (u === 1 || u === 2) $('#ha_mains_voltage_row').show(); else $('#ha_mains_voltage_row').hide();
+              if (data.ha.mains_voltage !== undefined) $('#ha_mains_voltage').val(data.ha.mains_voltage);
+              $('#ha_mains_entity_l1').val(data.ha.mains_entity_l1 || '');
+              $('#ha_mains_entity_l2').val(data.ha.mains_entity_l2 || '');
+              $('#ha_mains_entity_l3').val(data.ha.mains_entity_l3 || '');
+              var tr = data.ha.test_result;
+              if (tr === 'ok') $('#ha_test_result').text('Connection OK').css('color', 'green');
+              else if (tr === 'invalid_token') $('#ha_test_result').text('Invalid token (401)').css('color', 'red');
+              else if (tr === 'not_found') $('#ha_test_result').text('Not found (404)').css('color', 'red');
+              else if (tr) $('#ha_test_result').text(tr).css('color', 'red');
+              else $('#ha_test_result').text('');
+            }
             if (data.meter_types && Array.isArray(data.meter_types)) {
               var $mains = $('#evse_config_mains_meter_type'), $ev = $('#evse_config_ev_meter_type');
               $mains.find('option:not(:first)').remove();
@@ -344,6 +408,42 @@
               });
               if (data.settings.mains_meter_type !== undefined) $mains.val(String(data.settings.mains_meter_type));
               if (data.ev_meter && data.ev_meter.type !== undefined) $ev.val(String(data.ev_meter.type));
+            }
+            var evType = (data.ev_meter && data.ev_meter.type !== undefined) ? parseInt(data.ev_meter.type, 10) : 0;
+            // EV meter addr only for Modbus meter types (not Disabled=0, API=9)
+            var evUsesAddr = (evType !== 0 && evType !== 9);
+            if (evUsesAddr) $('#ev_meter_addr_row').show(); else $('#ev_meter_addr_row').hide();
+            var mainsType = data.settings.mains_meter_type !== undefined ? parseInt(data.settings.mains_meter_type, 10) : 0;
+            // Mains meter addr only for Modbus meter types (not Disabled=0, Sensorbox=1, API=9, HomeWizard P1=13)
+            var mainsUsesAddr = (mainsType !== 0 && mainsType !== 1 && mainsType !== 9 && mainsType !== 13);
+            if (mainsUsesAddr) $('#mains_meter_addr_row').show(); else $('#mains_meter_addr_row').hide();
+            if (mainsType === 9) $('#mains_api_options').show(); else $('#mains_api_options').hide();
+            var apiSrc = (data.ha && data.ha.mains_api_source !== undefined) ? parseInt(String(data.ha.mains_api_source), 10) : 0;
+            if (mainsType === 9) {
+              if (apiSrc === 1) { $('#mains_mqtt_note').hide(); $('#mains_ha_entity_rows').show(); }
+              else { $('#mains_mqtt_note').show(); $('#mains_ha_entity_rows').hide(); }
+            }
+            if (mainsType === 9 && apiSrc === 1) {
+              if (typeof validateHAEntity === 'function') {
+                if (($('#ha_mains_entity_l1').val() || '').trim()) validateHAEntity('ha_mains_entity_l1', 'ha_entity_l1_status');
+                if (($('#ha_mains_entity_l2').val() || '').trim()) validateHAEntity('ha_mains_entity_l2', 'ha_entity_l2_status');
+                if (($('#ha_mains_entity_l3').val() || '').trim()) validateHAEntity('ha_mains_entity_l3', 'ha_entity_l3_status');
+                if (($('#max_current_ha_entity').val() || '').trim()) validateHAEntity('max_current_ha_entity', 'max_current_ha_entity_status');
+              }
+            }
+            // Solar meter
+            if (data.solar_meter_source !== undefined) $('#solar_meter_source').val(String(data.solar_meter_source));
+            if (data.solar_meter_unit !== undefined) $('#solar_meter_unit').val(String(data.solar_meter_unit));
+            if (data.solar_meter_mqtt_topic !== undefined) $('#solar_meter_mqtt_topic').val(data.solar_meter_mqtt_topic || '');
+            if (data.solar_meter_ha_entity !== undefined) $('#solar_meter_ha_entity').val(data.solar_meter_ha_entity || '');
+            var smSrc = (data.solar_meter_source !== undefined) ? parseInt(String(data.solar_meter_source), 10) : 0;
+            if (smSrc === 1) { $('#solar_meter_mqtt_row').show(); $('#solar_meter_ha_row').hide(); $('#solar_meter_unit_row').show(); }
+            else if (smSrc === 2) { $('#solar_meter_mqtt_row').hide(); $('#solar_meter_ha_row').show(); $('#solar_meter_unit_row').show(); }
+            else { $('#solar_meter_mqtt_row').hide(); $('#solar_meter_ha_row').hide(); $('#solar_meter_unit_row').hide(); }
+            var smUnit = (data.solar_meter_unit !== undefined) ? parseInt(String(data.solar_meter_unit), 10) : 0;
+            if (smUnit === 1 || smUnit === 2) $('#solar_meter_wkw_note').show(); else $('#solar_meter_wkw_note').hide();
+            if (smSrc === 2 && typeof validateHAEntity === 'function' && ($('#solar_meter_ha_entity').val() || '').trim()) {
+              validateHAEntity('solar_meter_ha_entity', 'solar_meter_ha_entity_status');
             }
             // Refresh jQuery Mobile selectmenu so closed state shows the actual selected value
             $('#evse_config_section select').each(function() {
@@ -525,6 +625,30 @@
           $('#evmeter_currents_2').text((data.ev_meter.currents.L2/10).toFixed(1) + " A");
           $('#evmeter_currents_3').text((data.ev_meter.currents.L3/10).toFixed(1) + " A");
         }
+        if (data.mode_id == 2) {
+          var solarVal, solarTs, solarSource;
+          if (data.solar_meter_source && data.solar_meter_source != 0) {
+            solarVal = (data.solar_meter_value || 0) / 10;
+            solarTs = data.solar_meter_last_update || 0;
+            solarSource = "Solar meter";
+          } else {
+            var total = (data.phase_currents && data.phase_currents.TOTAL !== undefined) ? data.phase_currents.TOTAL : 0;
+            solarVal = total < 0 ? (-total / 10) : 0;
+            solarTs = (data.phase_currents && data.phase_currents.last_data_update) || 0;
+            solarSource = "Grid export (chasing zero)";
+          }
+          $('#solar_current_value').text(solarVal.toFixed(1) + " A");
+          $('#solar_current_source').text(solarSource);
+          if (solarTs > 0) {
+            $('#solar_current_time').text(new Date(solarTs * 1000).toLocaleTimeString());
+            $('#solar_current_date').text(new Date(solarTs * 1000).toLocaleDateString());
+            $('[id=with_solar_current_date]').show();
+            $('[id=with_solar_current_time]').show();
+          } else {
+            $('[id=with_solar_current_date]').hide();
+            $('[id=with_solar_current_time]').hide();
+          }
+        }
       }
 
       // Add event listener for TLS checkbox
@@ -533,7 +657,88 @@
       // Mark EVSE config / solar / override as dirty when user edits (so poll never overwrites)
       $(document).on('change input', '#evse_config_section select, #evse_config_section input, #solar_start_current, #solar_max_import_current, #solar_stop_time, #mode_override_current', function() {
         evseFormDirty = true;
+        var $mainsType = $('#evse_config_mains_meter_type');
+        if ($mainsType.length && $(this).attr('id') === 'evse_config_mains_meter_type') {
+          var mt = parseInt($mainsType.val(), 10);
+          var mainsUsesAddr = (mt !== 0 && mt !== 1 && mt !== 9 && mt !== 13);
+          if (mainsUsesAddr) $('#mains_meter_addr_row').show(); else $('#mains_meter_addr_row').hide();
+          if (mt === 9) $('#mains_api_options').show(); else $('#mains_api_options').hide();
+        }
+        var $evType = $('#evse_config_ev_meter_type');
+        if ($evType.length && $(this).attr('id') === 'evse_config_ev_meter_type') {
+          var et = parseInt($evType.val(), 10);
+          if (et !== 0 && et !== 9) $('#ev_meter_addr_row').show(); else $('#ev_meter_addr_row').hide();
+        }
+        var $apiSrc = $('#ha_mains_api_source');
+        if ($apiSrc.length && $(this).attr('id') === 'ha_mains_api_source') {
+          if ($apiSrc.val() === '1') { $('#mains_mqtt_note').hide(); $('#mains_ha_entity_rows').show(); }
+          else { $('#mains_mqtt_note').show(); $('#mains_ha_entity_rows').hide(); }
+        }
+        var $maxCurSrc = $('#max_current_source');
+        if ($maxCurSrc.length && $(this).attr('id') === 'max_current_source') {
+          var v = $maxCurSrc.val();
+          if (v === '0') { $('#max_current_static_row').show(); $('#max_current_mqtt_row').hide(); $('#max_current_ha_row').hide(); $('#evse_config_current_max').prop('disabled', false); }
+          else if (v === '1') { $('#max_current_static_row').hide(); $('#max_current_mqtt_row').show(); $('#max_current_ha_row').hide(); $('#evse_config_current_max').prop('disabled', true); }
+          else { $('#max_current_static_row').hide(); $('#max_current_mqtt_row').hide(); $('#max_current_ha_row').show(); $('#evse_config_current_max').prop('disabled', true); }
+        }
+        var $maxCurHAUnit = $('#max_current_ha_unit');
+        if ($maxCurHAUnit.length) {
+          var u = parseInt($maxCurHAUnit.val(), 10);
+          if (u === 1 || u === 2) $('#max_current_ha_voltage_row').show(); else $('#max_current_ha_voltage_row').hide();
+        }
+        var $mainsUnit = $('#ha_mains_unit');
+        if ($mainsUnit.length && $(this).attr('id') === 'ha_mains_unit') {
+          var u = parseInt($mainsUnit.val(), 10);
+          if (u === 1 || u === 2) $('#ha_mains_voltage_row').show(); else $('#ha_mains_voltage_row').hide();
+        }
+        var $solarMeterSrc = $('#solar_meter_source');
+        if ($solarMeterSrc.length && $(this).attr('id') === 'solar_meter_source') {
+          var v = $solarMeterSrc.val();
+          if (v === '1') { $('#solar_meter_mqtt_row').show(); $('#solar_meter_ha_row').hide(); $('#solar_meter_unit_row').show(); }
+          else if (v === '2') { $('#solar_meter_mqtt_row').hide(); $('#solar_meter_ha_row').show(); $('#solar_meter_unit_row').show(); }
+          else { $('#solar_meter_mqtt_row').hide(); $('#solar_meter_ha_row').hide(); $('#solar_meter_unit_row').hide(); }
+        }
+        var $solarMeterUnit = $('#solar_meter_unit');
+        if ($solarMeterUnit.length && $(this).attr('id') === 'solar_meter_unit') {
+          var u = parseInt($solarMeterUnit.val(), 10);
+          if (u === 1 || u === 2) $('#solar_meter_wkw_note').show(); else $('#solar_meter_wkw_note').hide();
+        }
       });
+
+      // Debounced HA entity validation (500 ms after typing stops)
+      var haEntityValidateTimeouts = {};
+      function validateHAEntity(inputId, statusId) {
+        var entityId = $('#' + inputId).val();
+        if (typeof entityId === 'string') entityId = entityId.trim();
+        var $status = $('#' + statusId);
+        if (!entityId) {
+          $status.removeClass('text-success text-danger').text('');
+          return;
+        }
+        $status.removeClass('text-success text-danger').text('…').attr('title', '');
+        $.getJSON('/api/validate_ha_entity?entity_id=' + encodeURIComponent(entityId))
+          .then(function(data) {
+            if (data.ok) {
+              $status.removeClass('text-danger').addClass('text-success').text('✓').attr('title', 'Entity found');
+            } else {
+              var err = (data.error === 'not_found') ? 'Not found (404)' : (data.error === 'ha_not_configured') ? 'HA not configured' : (data.error || 'Error');
+              $status.removeClass('text-success').addClass('text-danger').text('✗').attr('title', err);
+            }
+          })
+          .fail(function() {
+            $status.removeClass('text-success').addClass('text-danger').text('✗').attr('title', 'Request failed');
+          });
+      }
+      function scheduleValidateHAEntity(inputId, statusId) {
+        var key = inputId;
+        if (haEntityValidateTimeouts[key]) clearTimeout(haEntityValidateTimeouts[key]);
+        haEntityValidateTimeouts[key] = setTimeout(function() { validateHAEntity(inputId, statusId); haEntityValidateTimeouts[key] = null; }, 500);
+      }
+      $(document).on('input', '#ha_mains_entity_l1', function() { scheduleValidateHAEntity('ha_mains_entity_l1', 'ha_entity_l1_status'); });
+      $(document).on('input', '#ha_mains_entity_l2', function() { scheduleValidateHAEntity('ha_mains_entity_l2', 'ha_entity_l2_status'); });
+      $(document).on('input', '#ha_mains_entity_l3', function() { scheduleValidateHAEntity('ha_mains_entity_l3', 'ha_entity_l3_status'); });
+      $(document).on('input', '#max_current_ha_entity', function() { scheduleValidateHAEntity('max_current_ha_entity', 'max_current_ha_entity_status'); });
+      $(document).on('input', '#solar_meter_ha_entity', function() { scheduleValidateHAEntity('solar_meter_ha_entity', 'solar_meter_ha_entity_status'); });
   </script>
 
 
@@ -1380,6 +1585,57 @@
                                     <path fill="currentColor" d="M17.3 5C19 6.5 20 8.6 20 11C20 15.4 16.4 19 12 19S4 15.4 4 11C4 8.6 5.1 6.5 6.7 5H17.3M18 3H6L5.4 3.5C3.2 5.4 2 8.1 2 11C2 16.5 6.5 21 12 21S22 16.5 22 11C22 8.1 20.8 5.4 18.6 3.5L18 3M13 7.5C13 8.3 13.7 9 14.5 9S16 8.3 16 7.5 15.3 6 14.5 6 13 6.7 13 7.5M8 7.5C8 8.3 8.7 9 9.5 9S11 8.3 11 7.5 10.3 6 9.5 6 8 6.7 8 7.5M7 13C8.1 13 9 12.1 9 11C9 9.9 8.1 9 7 9S5 9.9 5 11C5 12.1 5.9 13 7 13M11.5 15C11.5 13.9 10.6 13 9.5 13S7.5 13.9 7.5 15C7.5 16.1 8.4 17 9.5 17S11.5 16.1 11.5 15M12 13C13.1 13 14 12.1 14 11C14 9.9 13.1 9 12 9S10 9.9 10 11C10 12.1 10.9 13 12 13M16.5 15C16.5 13.9 15.6 13 14.5 13S12.5 13.9 12.5 15C12.5 16.1 13.4 17 14.5 17S16.5 16.1 16.5 15M19 11C19 9.9 18.1 9 17 9S15 9.9 15 11C15 12.1 15.9 13 17 13S19 12.1 19 11" />
                                   </svg>
                                 </i>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+              </div>
+
+              <div class="col-xl-4 col-md-6 mb-4 with_solar" style="display: none;">
+                <div class="card border-left-info shadow h-100 py-2">
+                    <div class="card-body">
+                        <div class="row no-gutters align-items-center">
+                            <div class="col mr-2">
+                                <div class="text-xl font-weight-bold text-info text-uppercase mb-1">Solar Current</div>
+                                <div class="row no-gutters align-items-center">
+                                  <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">
+                                      Source:
+                                    </div>
+                                    <div class="col">
+                                      <div class="h5 mb-0 mr-3 text-gray-800" id="solar_current_source" style="text-align: right;"></div>
+                                    </div>
+                                </div>
+                                <div class="row no-gutters align-items-center">
+                                  <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">
+                                      Current:
+                                    </div>
+                                    <div class="col">
+                                      <div class="h5 mb-0 mr-3 text-gray-800" id="solar_current_value" style="text-align: right;"></div>
+                                    </div>
+                                </div>
+                                <div class="row no-gutters align-items-center" id="with_solar_current_date">
+                                  <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">
+                                      Date:
+                                    </div>
+                                    <div class="col">
+                                      <div class="h5 mb-0 mr-3 text-gray-800" id="solar_current_date" style="text-align: right;"></div>
+                                    </div>
+                                </div>
+                                <div class="row no-gutters align-items-center" id="with_solar_current_time">
+                                  <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">
+                                      Time:
+                                    </div>
+                                    <div class="col">
+                                      <div class="h5 mb-0 mr-3 text-gray-800" id="solar_current_time" style="text-align: right;"></div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-auto">
+                                <i class="fas fa-sun fa-2x text-gray-300">
+                                  <svg style="width:48px;height:48px" viewBox="0 0 24 24">
+                                    <path fill="currentColor" d="M12,7A5,5 0 0,1 17,12A5,5 0 0,1 12,17A5,5 0 0,1 7,12A5,5 0 0,1 12,7M12,9A3,3 0 0,0 9,12A3,3 0 0,0 12,15A3,3 0 0,0 15,12A3,3 0 0,0 12,9M12,2L14.39,5.42C13.65,5.15 12.84,5 12,5C11.16,5 10.35,5.15 9.61,5.42L12,2M3.34,7L7.5,6.65C6.9,7.16 6.36,7.78 5.94,8.5C5.5,9.24 5.25,10 5.11,10.79L3.34,7M3.34,17L5.11,13.21C5.25,14 5.53,14.76 5.94,15.5C6.36,16.22 6.9,16.84 7.5,17.35L3.34,17M20.65,7L18.88,10.79C18.74,10 18.47,9.24 18.06,8.5C17.64,7.78 17.1,7.16 16.5,6.65L20.65,7M20.65,17L16.5,17.35C17.1,16.84 17.64,16.22 18.06,15.5C18.47,14.76 18.74,14 18.88,13.21L20.65,17M12,22L9.59,18.56C10.33,18.83 11.14,19 12,19C12.82,19 13.63,18.83 14.37,18.56L12,22Z" />
+                                  </svg>
+                                </i>
                             </div>
                         </div>
                     </div>
@@ -1542,6 +1798,10 @@
                       add("lock", "evse_config_lock");
                       add("current_max", "evse_config_current_max");
                       add("current_max_circuit", "evse_config_current_max_circuit");
+                      add("max_current_source", "max_current_source");
+                      params.push("max_current_mqtt_topic=" + encodeURIComponent($('#max_current_mqtt_topic').val() || ''));
+                      add("max_current_ha_unit", "max_current_ha_unit");
+                      params.push("max_current_ha_entity=" + encodeURIComponent($('#max_current_ha_entity').val() || ''));
                       add("current_main", "evse_config_current_main");
                       add("loadbl", "evse_config_loadbl");
                       add("grid", "evse_config_grid");
@@ -1550,6 +1810,10 @@
                       add("mains_meter_address", "evse_config_mains_meter_address");
                       add("ev_meter_type", "evse_config_ev_meter_type");
                       add("ev_meter_address", "evse_config_ev_meter_address");
+                      add("solar_meter_source", "solar_meter_source");
+                      add("solar_meter_unit", "solar_meter_unit");
+                      params.push("solar_meter_mqtt_topic=" + encodeURIComponent($('#solar_meter_mqtt_topic').val() || ''));
+                      params.push("solar_meter_ha_entity=" + encodeURIComponent($('#solar_meter_ha_entity').val() || ''));
                       add("switch", "evse_config_switch");
                       add("rcmon", "evse_config_rcmon", true);
                       add("rfidreader", "evse_config_rfidreader");
@@ -1557,9 +1821,45 @@
                       add("max_temp", "evse_config_max_temp");
                       add("lcd_pin", "evse_config_lcd_pin");
                       add("app_server", "evse_config_app_server", true);
+                      if (document.getElementById("ha_enabled")) {
+                        add("ha_enabled", "ha_enabled", true);
+                        add("ha_server_url", "ha_server_url");
+                        add("ha_port", "ha_port");
+                        add("ha_refresh_interval", "ha_refresh_interval");
+                        add("mains_api_source", "ha_mains_api_source");
+                        add("mains_unit", "ha_mains_unit");
+                        var volt = $('#max_current_ha_voltage_row').is(':visible') ? parseInt($('#max_current_ha_voltage').val(), 10) : parseInt($('#ha_mains_voltage').val(), 10);
+                        if (volt >= 100 && volt <= 300) params.push("mains_voltage=" + volt);
+                        params.push("mains_entity_l1=" + encodeURIComponent($('#ha_mains_entity_l1').val() || ''));
+                        params.push("mains_entity_l2=" + encodeURIComponent($('#ha_mains_entity_l2').val() || ''));
+                        params.push("mains_entity_l3=" + encodeURIComponent($('#ha_mains_entity_l3').val() || ''));
+                        if ($('#ha_token').val()) add("ha_token", "ha_token");
+                      }
                       if (params.length === 0) return;
                       $.post("/settings?" + params.join("&")).then(function() { evseFormDirty = false; loadData(true); alert("EVSE configuration saved."); }).fail(function() { alert("Save failed."); });
                     }
+                    function testHaConnection() {
+                      var params = ["test_ha=1"];
+                      var url = $('#ha_server_url').val();
+                      if (url) params.push("ha_server_url=" + encodeURIComponent(url));
+                      var port = $('#ha_port').val();
+                      if (port) params.push("ha_port=" + encodeURIComponent(port));
+                      var token = $('#ha_token').val();
+                      if (token) params.push("ha_token=" + encodeURIComponent(token));
+                      var ref = $('#ha_refresh_interval').val();
+                      if (ref) params.push("ha_refresh_interval=" + encodeURIComponent(ref));
+                      params.push("ha_enabled=" + ($('#ha_enabled').prop('checked') ? 1 : 0));
+                      $('#ha_test_result').text('Testing…').css('color', '');
+                      $.ajax({ url: "/settings?" + params.join("&"), type: "POST", dataType: "json" }).then(function(data) {
+                        var tr = data.ha && data.ha.test_result;
+                        if (tr === 'ok') $('#ha_test_result').text('Connection OK').css('color', 'green');
+                        else if (tr === 'invalid_token') $('#ha_test_result').text('Invalid token (401)').css('color', 'red');
+                        else if (tr === 'not_found') $('#ha_test_result').text('Not found (404)').css('color', 'red');
+                        else if (tr) $('#ha_test_result').text(tr).css('color', 'red');
+                        else $('#ha_test_result').text('Error').css('color', 'red');
+                      }).fail(function() { $('#ha_test_result').text('Request failed').css('color', 'red'); });
+                    }
+                    $(document).on('click', '#ha_test_btn', testHaConnection);
                     function toggleEnableOcpp() {
                       var enableOcppCheckbox = document.getElementById("enable_ocpp");
                       $.post( "/settings?ocpp_update=1&ocpp_mode=" + (enableOcppCheckbox.checked == true ? 1 : 0));
@@ -1812,8 +2112,37 @@
                                             <div class="col" style="max-width:425px;"><select id="evse_config_lock"><option value="0">Disabled</option><option value="1">Solenoid</option><option value="2">Motor</option></select></div>
                                         </div>
                                         <div class="row no-gutters align-items-center">
+                                            <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">Max current source:</div>
+                                            <div class="col" style="max-width:425px;"><select id="max_current_source"><option value="0">Static</option><option value="1">MQTT</option><option value="2">Home Assistant</option></select></div>
+                                        </div>
+                                        <div id="max_current_static_row" class="evse-config-sub">
+                                        <div class="row no-gutters align-items-center">
                                             <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">Max current (A):</div>
                                             <div class="col" style="max-width:425px;"><input type="number" id="evse_config_current_max" min="6" max="80" style="width:80px;" class="ui-corner-all ui-shadow-inset"> per phase</div>
+                                        </div>
+                                        </div>
+                                        <div id="max_current_mqtt_row" class="evse-config-sub" style="display:none;">
+                                            <div class="row no-gutters align-items-center">
+                                                <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">MQTT topic:</div>
+                                                <div class="col" style="max-width:425px;"><input type="text" id="max_current_mqtt_topic" placeholder="{prefix}/Set/MaxCurrent" style="width:280px;" class="ui-corner-all ui-shadow-inset"></div>
+                                            </div>
+                                            <div class="row no-gutters align-items-center text-muted small ml-2 mt-1">
+                                                <div class="col" style="max-width:500px;">Configure your broker, Node-RED or Home Assistant to publish to this topic. Payload: amps as integer (6–80). Empty topic = <code>{prefix}/Set/MaxCurrent</code>.</div>
+                                            </div>
+                                        </div>
+                                        <div id="max_current_ha_row" class="evse-config-sub" style="display:none;">
+                                            <div class="row no-gutters align-items-center">
+                                                <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">Max current unit:</div>
+                                                <div class="col" style="max-width:425px;"><select id="max_current_ha_unit"><option value="0">A (amps)</option><option value="1">W (watts)</option><option value="2">kW (kilowatts)</option></select></div>
+                                            </div>
+                                            <div class="row no-gutters align-items-center" id="max_current_ha_voltage_row" style="display:none;">
+                                                <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">Phase voltage (V):</div>
+                                                <div class="col" style="max-width:425px;"><input type="number" id="max_current_ha_voltage" min="100" max="300" value="230" style="width:80px;" class="ui-corner-all ui-shadow-inset"> (for W/kW → A, same as mains)</div>
+                                            </div>
+                                            <div class="row no-gutters align-items-center">
+                                                <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">Max current entity:</div>
+                                                <div class="col d-flex align-items-center" style="max-width:425px;"><input type="text" id="max_current_ha_entity" placeholder="input_number.evse_max_current" style="width:220px;" class="ui-corner-all ui-shadow-inset"><span id="max_current_ha_entity_status" class="ml-2" aria-live="polite"></span></div>
+                                            </div>
                                         </div>
                                         <div class="row no-gutters align-items-center">
                                             <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">Circuit max (A):</div>
@@ -1841,9 +2170,42 @@
                                             <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">Mains meter type:</div>
                                             <div class="col" style="max-width:425px;"><select id="evse_config_mains_meter_type"><option value="0">Disabled</option></select></div>
                                         </div>
-                                        <div class="row no-gutters align-items-center">
-                                            <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">Mains meter addr:</div>
-                                            <div class="col" style="max-width:425px;"><input type="number" id="evse_config_mains_meter_address" min="10" max="247" style="width:80px;" class="ui-corner-all ui-shadow-inset"> (Modbus 10–247)</div>
+                                        <div id="mains_meter_addr_row" class="evse-config-sub" style="display:none;">
+                                            <div class="row no-gutters align-items-center">
+                                                <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">Mains meter addr:</div>
+                                                <div class="col" style="max-width:425px;"><input type="number" id="evse_config_mains_meter_address" min="10" max="247" style="width:80px;" class="ui-corner-all ui-shadow-inset"> (Modbus 10–247)</div>
+                                            </div>
+                                        </div>
+                                        <div id="mains_api_options" class="evse-config-sub" style="display:none;">
+                                            <div class="row no-gutters align-items-center">
+                                                <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">Mains API source:</div>
+                                                <div class="col" style="max-width:425px;"><select id="ha_mains_api_source"><option value="0">MQTT</option><option value="1">Home Assistant</option></select></div>
+                                            </div>
+                                            <div id="mains_mqtt_note" class="row no-gutters align-items-center text-muted small ml-2 mt-1" style="display:none;">
+                                                <div class="col" style="max-width:500px;">Publish L1:L2:L3 to topic <code>{prefix}/Set/MainsMeter</code>. Use deci-amps (e.g. <code>45:32:21</code>) or decimal amps (e.g. <code>4.5:3.2:2.1</code>). No entity IDs on this device—your broker/HA/Node-RED pushes the values.</div>
+                                            </div>
+                                            <div id="mains_ha_entity_rows" style="display:none;">
+                                            <div class="row no-gutters align-items-center">
+                                                <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">Mains value unit:</div>
+                                                <div class="col" style="max-width:425px;"><select id="ha_mains_unit"><option value="0">A (amps)</option><option value="1">W (watts)</option><option value="2">kW (kilowatts)</option></select></div>
+                                            </div>
+                                            <div class="row no-gutters align-items-center" id="ha_mains_voltage_row" style="display:none;">
+                                                <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">Phase voltage (V):</div>
+                                                <div class="col" style="max-width:425px;"><input type="number" id="ha_mains_voltage" min="100" max="300" value="230" style="width:80px;" class="ui-corner-all ui-shadow-inset"> (for W/kW → A)</div>
+                                            </div>
+                                            <div class="row no-gutters align-items-center">
+                                                <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">L1 current entity:</div>
+                                                <div class="col d-flex align-items-center" style="max-width:425px;"><input type="text" id="ha_mains_entity_l1" placeholder="sensor.mains_current_l1" style="width:220px;" class="ui-corner-all ui-shadow-inset"><span id="ha_entity_l1_status" class="ml-2" aria-live="polite"></span></div>
+                                            </div>
+                                            <div class="row no-gutters align-items-center">
+                                                <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">L2 current entity:</div>
+                                                <div class="col d-flex align-items-center" style="max-width:425px;"><input type="text" id="ha_mains_entity_l2" placeholder="sensor.mains_current_l2" style="width:220px;" class="ui-corner-all ui-shadow-inset"><span id="ha_entity_l2_status" class="ml-2" aria-live="polite"></span></div>
+                                            </div>
+                                            <div class="row no-gutters align-items-center">
+                                                <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">L3 current entity:</div>
+                                                <div class="col d-flex align-items-center" style="max-width:425px;"><input type="text" id="ha_mains_entity_l3" placeholder="sensor.mains_current_l3" style="width:220px;" class="ui-corner-all ui-shadow-inset"><span id="ha_entity_l3_status" class="ml-2" aria-live="polite"></span></div>
+                                            </div>
+                                            </div>
                                         </div>
 
                                         <h6 class="text-secondary mt-3 mb-2">EV meter</h6>
@@ -1851,11 +2213,45 @@
                                             <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">EV meter type:</div>
                                             <div class="col" style="max-width:425px;"><select id="evse_config_ev_meter_type"><option value="0">Disabled</option></select></div>
                                         </div>
-                                        <div class="row no-gutters align-items-center">
-                                            <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">EV meter addr:</div>
-                                            <div class="col" style="max-width:425px;"><input type="number" id="evse_config_ev_meter_address" min="11" max="247" style="width:80px;" class="ui-corner-all ui-shadow-inset"> (Modbus 11–247)</div>
+                                        <div id="ev_meter_addr_row" class="evse-config-sub" style="display:none;">
+                                            <div class="row no-gutters align-items-center">
+                                                <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">EV meter addr:</div>
+                                                <div class="col" style="max-width:425px;"><input type="number" id="evse_config_ev_meter_address" min="11" max="247" style="width:80px;" class="ui-corner-all ui-shadow-inset"> (Modbus 11–247)</div>
+                                            </div>
                                         </div>
-                                    </div>
+
+                                        <h6 class="text-secondary mt-3 mb-2">Solar meter</h6>
+                                        <div class="row no-gutters align-items-center">
+                                            <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">Solar meter source:</div>
+                                            <div class="col" style="max-width:425px;"><select id="solar_meter_source"><option value="0">Disabled</option><option value="1">MQTT</option><option value="2">Home Assistant</option></select></div>
+                                        </div>
+                                        <div id="solar_meter_mqtt_row" class="evse-config-sub" style="display:none;">
+                                            <div class="row no-gutters align-items-center">
+                                                <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">MQTT topic:</div>
+                                                <div class="col" style="max-width:425px;"><input type="text" id="solar_meter_mqtt_topic" placeholder="{prefix}/Set/SolarMeter" style="width:280px;" class="ui-corner-all ui-shadow-inset"></div>
+                                            </div>
+                                            <div class="row no-gutters align-items-center text-muted small ml-2 mt-1">
+                                                <div class="col" style="max-width:500px;">Publish value (A, W or kW per unit below) to this topic. Empty = <code>{prefix}/Set/SolarMeter</code>.</div>
+                                            </div>
+                                        </div>
+                                        <div id="solar_meter_unit_row" class="evse-config-sub" style="display:none;">
+                                            <div class="row no-gutters align-items-center">
+                                                <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">Solar meter unit:</div>
+                                                <div class="col" style="max-width:425px;"><select id="solar_meter_unit"><option value="0">A (amps)</option><option value="1">W (watts)</option><option value="2">kW (kilowatts)</option></select></div>
+                                            </div>
+                                            <div class="row no-gutters align-items-center text-muted small ml-2 mt-1" id="solar_meter_wkw_note" style="display:none;">
+                                                <div class="col" style="max-width:500px;">W/kW use mains phase voltage (see Mains API above).</div>
+                                            </div>
+                                        </div>
+                                        <div id="solar_meter_ha_row" class="evse-config-sub" style="display:none;">
+                                            <div class="row no-gutters align-items-center">
+                                                <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">Solar meter entity:</div>
+                                                <div class="col d-flex align-items-center" style="max-width:425px;"><input type="text" id="solar_meter_ha_entity" placeholder="sensor.solar_production" style="width:220px;" class="ui-corner-all ui-shadow-inset"><span id="solar_meter_ha_entity_status" class="ml-2" aria-live="polite"></span></div>
+                                            </div>
+                                        </div>
+                                        <div class="row no-gutters align-items-center text-muted small ml-2 mt-1">
+                                            <div class="col" style="max-width:500px;">Solar production value (deci-amps). Not yet wired to calculations—ready for future use.</div>
+                                        </div>
 
                                     <h6 class="text-secondary mt-3 mb-2">Switch &amp; safety</h6>
                                     <div class="row no-gutters align-items-center">
@@ -1919,6 +2315,28 @@
                                                 </div>
                                                 <button onclick="configureMqtt()" style="display:inline-block;">Save</button>
                                             </div>
+                                        </div>
+                                    </div>
+                                  </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div style="margin-bottom: 20px;" class="config">
+                      <div class="card border-left-primary shadow h-100 py-2">
+                        <div class="card-body">
+                            <div class="row no-gutters align-items-center">
+                                <div class="col mr-2">
+                                    <div class="text font-weight-bold text-primary text-uppercase mb-1">Config</div>
+                                    <div class="row no-gutters align-items-center" id="ha_config">
+                                        <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">Home Assistant:</div>
+                                        <div class="col">
+                                            <div class="mb-2"><input type="checkbox" id="ha_enabled"> <label for="ha_enabled">Enable Home Assistant pull</label></div>
+                                            <div class="mb-2"><label>Server URL: <input type="text" id="ha_server_url" placeholder="http://192.168.1.10" style="width:220px;" title="Base URL without path"></label></div>
+                                            <div class="mb-2"><label>Port: <input type="number" id="ha_port" min="1" max="65535" value="8123" style="width:80px;"></label></div>
+                                            <div class="mb-2"><label>Token: <input type="password" id="ha_token" placeholder="Long-Lived Access Token" style="width:280px;" title="Leave empty to keep existing"></label> <span id="ha_token_saved_hint" class="text-muted small" style="display:none;">(saved, leave empty to keep)</span></div>
+                                            <div class="mb-2"><label>Refresh (s): <input type="number" id="ha_refresh_interval" min="5" max="120" value="10" style="width:60px;"></label></div>
+                                            <div class="mb-2"><button type="button" id="ha_test_btn" class="ui-btn ui-shadow ui-corner-all">Test connection</button> <span id="ha_test_result" class="ml-2"></span></div>
                                         </div>
                                     </div>
                                   </div>

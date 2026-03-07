@@ -26,7 +26,10 @@
 #define __EVSE_ESP32
 
 
+#define HA_TOKEN_MAX_LEN 256  /* Home Assistant Long-Lived Access Token max length */
+
 #include <Arduino.h>
+#include <time.h>
 #include "main.h"
 #include "glcd.h"
 #include "meter.h"
@@ -128,6 +131,9 @@ extern uint16_t CardOffset;
 
 extern uint16_t SolarStopTimer;
 extern uint16_t MaxSumMainsTimer;
+extern uint8_t SolarMeterSource;
+extern int16_t SolarMeterValue;
+extern time_t SolarMeterLastUpdate;
 extern uint8_t RFIDstatus;
 extern uint8_t OcppMode;
 extern bool LocalTimeSet;

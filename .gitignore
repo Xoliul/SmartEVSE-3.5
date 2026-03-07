@@ -9,3 +9,13 @@ sdkconfig.*
 .DS_Store
 */.DS_Store
 .idea
+SmartEVSE-3/docs/API_SOLAR_METER_PLAN.md
+SmartEVSE-3/docs/DYNAMIC_GRID_IMPORT_LIMIT_PLAN.md
+SmartEVSE-3/docs/HA REST API.md
+SmartEVSE-3/docs/ONLINE-LOGGING-TO-LOG-HTML.md
+SmartEVSE-3/docs/POWER_BASED_INPUT_DESIGN.md
+SmartEVSE-3/docs/PROJECT_OVERVIEW.md
+SmartEVSE-3/docs/PULL_FROM_EXTERNAL_API.md
+SmartEVSE-3/docs/WEB_SETTINGS_EXPOSURE.md
+SmartEVSE-3/scripts/test_ha_connection.py
+/SmartEVSE-3/docs

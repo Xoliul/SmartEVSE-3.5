@@ -1076,16 +1076,42 @@ char IsCurrentAvailable(void) {
     // Charging will start after the timeout (chargedelay) period has ended
      // Only when StartCurrent configured or Node MinCurrent detected or Node inactive
     if (Mode == MODE_SOLAR) {                                                   // no active EVSE yet?
-        if (ActiveEVSE == 0 && Isum >= ((signed int)StartCurrent *-10)) {
-            _LOG_D("No current available StartCurrent line %d. ActiveEVSE=%u, TotalCurrent=%d.%dA, StartCurrent=%uA, Isum=%d.%dA, ImportCurrent=%uA.\n", __LINE__, ActiveEVSE, TotalCurrent/10, abs(TotalCurrent%10), StartCurrent, Isum/10, abs(Isum%10), ImportCurrent);
+#ifdef SMARTEVSE_VERSION
+        int16_t effectiveIsum = Isum;
+        if (SolarMeterSource != 0) {
+            time_t now = time(NULL);
+            bool smValid = (SolarMeterValue >= 0 && SolarMeterValue <= 2000 && (now - SolarMeterLastUpdate) < 90);
+            if (smValid) {
+                int houseLoad = MainsMeter.Imeasured - TotalCurrent;
+                if (houseLoad < 0) houseLoad = 0;
+                int availableSurplus = SolarMeterValue - houseLoad;
+                effectiveIsum = (int16_t)(-availableSurplus);
+                if (effectiveIsum > 2000) effectiveIsum = 2000;
+                if (effectiveIsum < -2000) effectiveIsum = -2000;
+            } else {
+                static time_t lastFallbackLog = 0;
+                if (now - lastFallbackLog >= 60) {
+                    lastFallbackLog = now;
+                    if (SolarMeterValue < 0 || SolarMeterValue > 2000)
+                        _LOG_I("Solar meter fallback: using grid export (chasing zero) - value out of range (%d.%dA)\n", SolarMeterValue/10, abs(SolarMeterValue%10));
+                    else
+                        _LOG_I("Solar meter fallback: using grid export (chasing zero) - data stale (>90s since last update)\n");
+                }
+            }
+        }
+#else
+        int16_t effectiveIsum = Isum;
+#endif
+        if (ActiveEVSE == 0 && effectiveIsum >= ((signed int)StartCurrent *-10)) {
+            _LOG_D("No current available StartCurrent line %d. ActiveEVSE=%u, TotalCurrent=%d.%dA, StartCurrent=%uA, Isum=%d.%dA, ImportCurrent=%uA.\n", __LINE__, ActiveEVSE, TotalCurrent/10, abs(TotalCurrent%10), StartCurrent, effectiveIsum/10, abs(effectiveIsum%10), ImportCurrent);
             return 0;
         }
         else if ((ActiveEVSE * MinCurrent * 10) > TotalCurrent) {               // check if we can split the available current between all active EVSE's
-            _LOG_D("No current available StartCurrent line %d. ActiveEVSE=%u, TotalCurrent=%d.%dA, StartCurrent=%uA, Isum=%d.%dA, ImportCurrent=%uA.\n", __LINE__, ActiveEVSE, TotalCurrent/10, abs(TotalCurrent%10), StartCurrent, Isum/10, abs(Isum%10), ImportCurrent);
+            _LOG_D("No current available StartCurrent line %d. ActiveEVSE=%u, TotalCurrent=%d.%dA, StartCurrent=%uA, Isum=%d.%dA, ImportCurrent=%uA.\n", __LINE__, ActiveEVSE, TotalCurrent/10, abs(TotalCurrent%10), StartCurrent, effectiveIsum/10, abs(effectiveIsum%10), ImportCurrent);
             return 0;
         }
-        else if (ActiveEVSE > 0 && Isum > ((signed int)ImportCurrent * 10) + TotalCurrent - (ActiveEVSE * MinCurrent * 10)) {
-            _LOG_D("No current available StartCurrent line %d. ActiveEVSE=%u, TotalCurrent=%d.%dA, StartCurrent=%uA, Isum=%d.%dA, ImportCurrent=%uA.\n", __LINE__, ActiveEVSE, TotalCurrent/10, abs(TotalCurrent%10), StartCurrent, Isum/10, abs(Isum%10), ImportCurrent);
+        else if (ActiveEVSE > 0 && effectiveIsum > ((signed int)ImportCurrent * 10) + TotalCurrent - (ActiveEVSE * MinCurrent * 10)) {
+            _LOG_D("No current available StartCurrent line %d. ActiveEVSE=%u, TotalCurrent=%d.%dA, StartCurrent=%uA, Isum=%d.%dA, ImportCurrent=%uA.\n", __LINE__, ActiveEVSE, TotalCurrent/10, abs(TotalCurrent%10), StartCurrent, effectiveIsum/10, abs(effectiveIsum%10), ImportCurrent);
             return 0;
         }
     }
@@ -1154,6 +1180,7 @@ void CalcBalancedCurrent(char mod) {
     char CurrentSet[NR_EVSES] = {0, 0, 0, 0, 0, 0, 0, 0};
     uint8_t n;
     bool LimitedByMaxSumMains = false;
+    int16_t effectiveIsum = Isum;  /* solar surplus: from solar meter when valid, else Isum (chasing zero); used in MODE_SOLAR */
     // ############### first calculate some basic variables #################
     if (BalancedState[0] == STATE_C && MaxCurrent > MaxCapacity && !Config)
         ChargeCurrent = MaxCapacity * 10;
@@ -1209,19 +1236,45 @@ void CalcBalancedCurrent(char mod) {
         }                    
     } //end MODE_NORMAL
     else { // start MODE_SOLAR || MODE_SMART
+#ifdef SMARTEVSE_VERSION
+        effectiveIsum = Isum;
+        if (Mode == MODE_SOLAR && SolarMeterSource != 0) {
+            time_t now = time(NULL);
+            bool smValid = (SolarMeterValue >= 0 && SolarMeterValue <= 2000 && (now - SolarMeterLastUpdate) < 90);
+            if (smValid) {
+                int houseLoad = MainsMeter.Imeasured - TotalCurrent;
+                if (houseLoad < 0) houseLoad = 0;
+                int availableSurplus = SolarMeterValue - houseLoad;
+                effectiveIsum = (int16_t)(-availableSurplus);
+                if (effectiveIsum > 2000) effectiveIsum = 2000;
+                if (effectiveIsum < -2000) effectiveIsum = -2000;
+            } else if (SolarMeterSource != 0) {
+                static time_t lastFallbackLog = 0;
+                if (now - lastFallbackLog >= 60) {
+                    lastFallbackLog = now;
+                    if (SolarMeterValue < 0 || SolarMeterValue > 2000)
+                        _LOG_I("Solar meter fallback: using grid export (chasing zero) - value out of range (%d.%dA)\n", SolarMeterValue/10, abs(SolarMeterValue%10));
+                    else
+                        _LOG_I("Solar meter fallback: using grid export (chasing zero) - data stale (>90s since last update)\n");
+                }
+            }
+        }
+#else
+        effectiveIsum = Isum;
+#endif
         if (Mode == MODE_SOLAR && State == STATE_B) {
             // Prepare for switching to state C
-            _LOG_D("waiting for Solar (B) Isum=%d dA, phases=%d\n", Isum, Nr_Of_Phases_Charging);
+            _LOG_D("waiting for Solar (B) Isum=%d dA, phases=%d\n", effectiveIsum, Nr_Of_Phases_Charging);
             if (EnableC2 == AUTO) {
                 // Mains isn't loaded, so the Isum must be negative for solar charging
                 // determine if enough current is available for 3-phase or 1-phase charging
                 // TODO: deal with strong fluctuations in startup
-                if (-Isum >= (30*MinCurrent+30)) { // 30x for 3-phase and 0.1A resolution; +30 to have 3x1.0A room for regulation
+                if (-effectiveIsum >= (30*MinCurrent+30)) { // 30x for 3-phase and 0.1A resolution; +30 to have 3x1.0A room for regulation
                     if (Nr_Of_Phases_Charging != 3) {
                         Switching_Phases_C2 = GOING_TO_SWITCH_3P;
                         _LOG_D("Solar starting in 3-phase mode\n");
                     }    
-                } else /*if (-Isum >= (10*MinCurrent+2))*/ {
+                } else /*if (-effectiveIsum >= (10*MinCurrent+2))*/ {
                     if (Nr_Of_Phases_Charging != 1) {
                         Switching_Phases_C2 = GOING_TO_SWITCH_1P;
                         _LOG_D("Solar starting in 1-phase mode\n");
@@ -1267,7 +1320,7 @@ void CalcBalancedCurrent(char mod) {
 
         if (Mode == MODE_SOLAR)                                                 // Solar version
         {
-            IsumImport = Isum - (10 * ImportCurrent);                           // Allow Import of power from the grid when solar charging
+            IsumImport = effectiveIsum - (10 * ImportCurrent);                   // Allow Import of power from the grid when solar charging
             // when there is NO charging, do not change the setpoint (IsetBalanced); except when we are in Master/Slave configuration
             if (ActiveEVSE > 0 && Idifference > 0) {                            // so we had some room for power as far as MaxCircuit and MaxMains are concerned
                 if (phasesLastUpdateFlag) {                                     // only increase or decrease current if measurements are updated.
@@ -1289,7 +1342,7 @@ void CalcBalancedCurrent(char mod) {
                     }
                 }
             }                                                                   // we already corrected Isetbalance in case of NOT enough power MaxCircuit/MaxMains
-            _LOG_V("Checkpoint 3 Solar Isetbalanced=%d.%d A, IsumImport=%d.%d, Isum=%d.%d, ImportCurrent=%u.\n", IsetBalanced/10, abs(IsetBalanced%10), IsumImport/10, abs(IsumImport%10), Isum/10, abs(Isum%10), ImportCurrent);
+            _LOG_V("Checkpoint 3 Solar Isetbalanced=%d.%d A, IsumImport=%d.%d, effectiveIsum=%d.%d, ImportCurrent=%u.\n", IsetBalanced/10, abs(IsetBalanced%10), IsumImport/10, abs(IsumImport%10), effectiveIsum/10, abs(effectiveIsum%10), ImportCurrent);
         } //end MODE_SOLAR
         else { // MODE_SMART
         // New EVSE charging, and only if we have active EVSE's
@@ -1339,7 +1392,7 @@ void CalcBalancedCurrent(char mod) {
                                               // Importing too much?
                 if (ActiveEVSE && IsumImport > 0 &&
                         // Would a stop free so much current that StartCurrent would immediately restart charging?
-                        (Isum > (ActiveEVSE * MinCurrent * Nr_Of_Phases_Charging - StartCurrent) * 10 ||
+                        (effectiveIsum > (ActiveEVSE * MinCurrent * Nr_Of_Phases_Charging - StartCurrent) * 10 ||
                          // don't apply that rule if we are 3P charging and we could switch to 1P
                          (Nr_Of_Phases_Charging > 1 && EnableC2 == AUTO))) {
                     if (Nr_Of_Phases_Charging > 1 && EnableC2 == AUTO && State == STATE_C) {        // Only for Master when charging, Nodes are not supported yet
@@ -1409,7 +1462,7 @@ void CalcBalancedCurrent(char mod) {
                     // It also needs to sustain that minimal room for 60 seconds before it may switch to 3P
                     int spareCurrent = (3*(MinCurrent+1)-MaxCurrent);  // constant, gap between 1P range and 3P range
                     if (spareCurrent < 0) spareCurrent = 3;  // const, when 1P range overlaps 3P range
-                    if (-Isum > (10*spareCurrent)) { // note that Isum is surplus current, which is negative
+                    if (-effectiveIsum > (10*spareCurrent)) { // note that effectiveIsum is surplus current (negative when surplus)
                         // start solar stop timer
                         if (SolarStopTimer == 0) setSolarStopTimer(63);
                         // near end of solar stop timer, instruct to go to 3P charging
@@ -1420,13 +1473,13 @@ void CalcBalancedCurrent(char mod) {
                             setSolarStopTimer(0);
                         }
                         else {
-                            _LOG_D("Solar charge: we can switch 1P->3P; Isum=%.1fA, spare=%dA\n", (float)-Isum/10, spareCurrent);
+                            _LOG_D("Solar charge: we can switch 1P->3P; surplus=%.1fA, spare=%dA\n", (float)-effectiveIsum/10, spareCurrent);
                         }
                     }
                     else {
                         // not enough spare current to switch to 3P
                         setSolarStopTimer(0);
-                        _LOG_D("Solar charge: not enough spare current to switch to 3P; Isum=%.1fA, spare=%dA\n", (float)-Isum/10, spareCurrent);
+                        _LOG_D("Solar charge: not enough spare current to switch to 3P; surplus=%.1fA, spare=%dA\n", (float)-effectiveIsum/10, spareCurrent);
                     }
 
             }
@@ -1527,8 +1580,8 @@ void CalcBalancedCurrent(char mod) {
         if (saveActiveEVSE > 0 && (Mode == MODE_SOLAR || LoadBl >= 1) && (now - lastBalanceLog >= 15000)) {
             lastBalanceLog = now;
             if (Mode == MODE_SOLAR) {
-                _LOG_I("Solar: Isum=%d.%dA IsumImport=%d.%dA IsetBalanced=%d.%dA SolarStopTimer=%us %s\n",
-                    Isum/10, abs(Isum%10), IsumImport/10, abs(IsumImport%10), IsetBalanced/10, abs(IsetBalanced%10), (unsigned)SolarStopTimer,
+                _LOG_I("Solar: surplus=%d.%dA IsumImport=%d.%dA IsetBalanced=%d.%dA SolarStopTimer=%us %s\n",
+                    -effectiveIsum/10, abs(effectiveIsum%10), IsumImport/10, abs(IsumImport%10), IsetBalanced/10, abs(IsetBalanced%10), (unsigned)SolarStopTimer,
                     LimitedByMaxSumMains ? "MaxMains" : (Idifference <= 0 ? "no headroom" : "surplus"));
             } else {
                 _LOG_I("LoadBalance: IsetBalanced=%d.%dA Idifference=%d.%dA ActiveEVSE=%u %s\n",

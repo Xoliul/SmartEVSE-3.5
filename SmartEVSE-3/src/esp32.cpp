@@ -127,6 +127,36 @@ extern ModbusMessage MBEVMeterResponse(ModbusMessage request);
 hw_timer_t * timerA = NULL;
 Preferences preferences;
 
+// Home Assistant pull connection (API mains meter / dynamic MaxMains)
+bool HAEnabled = false;
+char HAServerURL[96] = "";
+uint16_t HAPort = 8123;
+char HAToken[HA_TOKEN_MAX_LEN] = "";
+uint16_t HARefreshInterval = 10;
+
+// Mains meter API source when MainsMeter.Type == EM_API: 0 = MQTT, 1 = Home Assistant
+uint8_t MainsMeterAPISource = 0;
+// Unit of HA entity state when pulling: 0 = A (amps), 1 = W (watts), 2 = kW (kilowatts). W/kW use MainsHAVoltage to convert to amps.
+uint8_t MainsHAUnit = 0;
+uint16_t MainsHAVoltage = 230;
+char MainsHAEntityL1[64] = "";
+char MainsHAEntityL2[64] = "";
+char MainsHAEntityL3[64] = "";
+
+// Max current source: 0 = Static (set number), 1 = MQTT (subscribe to topic), 2 = Home Assistant (fetch entity)
+uint8_t MaxCurrentSource = 0;
+char MaxCurrentMQTTTopic[128] = "";   // empty = use MQTTprefix + "/Set/MaxCurrent"
+uint8_t MaxCurrentHAUnit = 0;         // 0 = A, 1 = W, 2 = kW (W/kW use shared MainsHAVoltage)
+char MaxCurrentHAEntity[64] = "";
+
+// Solar meter: 0 = Disabled, 1 = MQTT, 2 = Home Assistant. Unit 0=A, 1=W, 2=kW (W/kW use shared MainsHAVoltage).
+uint8_t SolarMeterSource = 0;
+uint8_t SolarMeterUnit = 0;
+char SolarMeterMQTTTopic[128] = "";
+char SolarMeterHAEntity[64] = "";
+int16_t SolarMeterValue = 0;          // deci-amps, used for solar surplus when valid
+time_t SolarMeterLastUpdate = 0;      // set when value received via MQTT/HA; used to detect stale data
+
 // delayed write settings - reduces flash wear by combining multiple writes into one
 static bool SettingsDirty = false;                      // Flag indicating settings need to be written
 static unsigned long LastSettingsWriteTime = 0;         // millis() timestamp of last write
@@ -154,9 +184,29 @@ struct SettingsCache {
     uint8_t AutoUpdate, LCDlock, CableLock;
     uint16_t LCDPin;
     bool MQTTSmartServer;
+    // Home Assistant pull
+    bool HAEnabled;
+    uint16_t HAPort, HARefreshInterval;
+    char HAServerURL[96];
+    char HAToken[HA_TOKEN_MAX_LEN];
+    uint8_t MainsMeterAPISource;
+    uint8_t MainsHAUnit;
+    uint16_t MainsHAVoltage;
+    char MainsHAEntityL1[64], MainsHAEntityL2[64], MainsHAEntityL3[64];
+    uint8_t MaxCurrentSource;
+    char MaxCurrentMQTTTopic[128];
+    uint8_t MaxCurrentHAUnit;
+    char MaxCurrentHAEntity[64];
+    uint8_t SolarMeterSource;
+    uint8_t SolarMeterUnit;
+    char SolarMeterMQTTTopic[128];
+    char SolarMeterHAEntity[64];
 #if ENABLE_OCPP && defined(SMARTEVSE_VERSION)
     uint8_t OcppMode;
 #endif
+    // Last known good total_increasing energy (Wh) - never publish less than this to avoid breaking HA statistics
+    int32_t lastKnownEVImportWh;
+    int32_t lastKnownMainsImportWh;
     bool valid;  // True once cache is populated from read_settings()
 };
 static SettingsCache settingsCache = {};
@@ -183,6 +233,12 @@ static SettingsCache settingsCache = {};
 #define PREFS_PUT_BOOL_IF_CHANGED(key, value, cacheVar) \
     if (!settingsCache.valid || (value) != settingsCache.cacheVar) { \
         preferences.putBool(key, value); \
+        settingsCache.cacheVar = (value); \
+    }
+
+#define PREFS_PUT_LONG_IF_CHANGED(key, value, cacheVar) \
+    if (!settingsCache.valid || (value) != settingsCache.cacheVar) { \
+        preferences.putLong(key, value); \
         settingsCache.cacheVar = (value); \
     }
 
@@ -614,6 +670,35 @@ void mqtt_receive_callback(const String topic, const String payload) {
                 setOverrideCurrent(RequestedCurrent);
             }
         }
+    } else if (topic.endsWith("/MaxCurrent") || (MaxCurrentMQTTTopic[0] != '\0' && topic == MaxCurrentMQTTTopic)) {
+        // MaxCurrent topic received - only process when source is MQTT
+        if (MaxCurrentSource != 1) {
+            _LOG_I("MQTT MaxCurrent ignored: Max current source is not MQTT (source=%d). Set Max current source to MQTT in EVSE config.", MaxCurrentSource);
+        } else {
+            String expectedTopic = MaxCurrentMQTTTopic[0] != '\0' ? String(MaxCurrentMQTTTopic) : MQTTprefix + "/Set/MaxCurrent";
+            if (topic != expectedTopic) {
+                _LOG_I("MQTT MaxCurrent ignored: topic mismatch. Got '%s', expected '%s' (case-sensitive).", topic.c_str(), expectedTopic.c_str());
+            } else {
+                int val = payload.toInt();
+                if (val >= 6 && val <= 80) {
+                    MaxCurrent = (uint16_t)val;
+                    SEND_TO_CH32(MaxCurrent)
+                    _LOG_I("MQTT MaxCurrent received: %d A (topic=%s)", val, topic.c_str());
+                } else {
+                    _LOG_I("MQTT MaxCurrent rejected (out of range): %d (topic=%s)", val, topic.c_str());
+                }
+            }
+        }
+    } else if (SolarMeterSource == 1 && (topic == (SolarMeterMQTTTopic[0] != '\0' ? String(SolarMeterMQTTTopic) : MQTTprefix + "/Set/SolarMeter"))) {
+        float val = payload.toFloat();
+        float vNom = (MainsHAVoltage >= 100 && MainsHAVoltage <= 300) ? (float)MainsHAVoltage : 230.0f;
+        if (SolarMeterUnit == 1 && vNom > 0.0f) val = val / vNom;
+        else if (SolarMeterUnit == 2 && vNom > 0.0f) val = (val * 1000.0f) / vNom;
+        if (val < 0.0f) val = 0.0f;
+        if (val > 200.0f) val = 200.0f;
+        SolarMeterValue = (int16_t)(val * 10);
+        SolarMeterLastUpdate = time(NULL);
+        _LOG_I("MQTT SolarMeter received: %.1f A -> %d dA (topic=%s)", val, SolarMeterValue, topic.c_str());
     } else if (topic == MQTTprefix + "/Set/CurrentMaxSumMains" && LoadBl < 2) {
         uint16_t RequestedCurrent = payload.toInt();
         if (RequestedCurrent == 0) {
@@ -637,11 +722,28 @@ void mqtt_receive_callback(const String topic, const String payload) {
             CPDutyOverride = true;
         }
     } else if (topic == MQTTprefix + "/Set/MainsMeter") {
-        if (MainsMeter.Type != EM_API || LoadBl >= 2)
+        if (MainsMeter.Type != EM_API || LoadBl >= 2) {
+            _LOG_D("MQTT MainsMeter: ignored (MainsMeter.Type=%d, LoadBl=%d)", MainsMeter.Type, LoadBl);
             return;
+        }
+        if (MainsMeterAPISource == 1) {
+            _LOG_D("MQTT MainsMeter: ignored (using HA API source)");
+            return;
+        }
 
         int32_t L1, L2, L3;
-        int n = sscanf(payload.c_str(), "%d:%d:%d", &L1, &L2, &L3);
+        int n;
+        if (payload.indexOf('.') >= 0) {
+            float f1, f2, f3;
+            n = sscanf(payload.c_str(), "%f:%f:%f", &f1, &f2, &f3);
+            if (n == 3) {
+                L1 = (int32_t)(f1 * 10);
+                L2 = (int32_t)(f2 * 10);
+                L3 = (int32_t)(f3 * 10);
+            }
+        } else {
+            n = sscanf(payload.c_str(), "%d:%d:%d", &L1, &L2, &L3);
+        }
 
         // MainsMeter can measure -200A to +200A per phase
         if (n == 3 && (L1 > -2000 && L1 < 2000) && (L2 > -2000 && L2 < 2000) && (L3 > -2000 && L3 < 2000)) {
@@ -656,16 +758,33 @@ void mqtt_receive_callback(const String topic, const String payload) {
 #else //v4
             Serial1.printf("@Irms:%03u,%d,%d,%d\n", MainsMeter.Address, L1, L2, L3); //Irms:011,312,123,124 means: the meter on address 11(dec) has Irms[0] 312 dA, Irms[1] of 123 dA, Irms[2] of 124 dA
 #endif
+            _LOG_I("MQTT MainsMeter received: L1=%d L2=%d L3=%d dA (topic=%s)", L1, L2, L3, topic.c_str());
+        } else if (n != 3) {
+            _LOG_I("MQTT MainsMeter: parse failed (expected 3 values, got %d); payload='%s'", n, payload.c_str());
+        } else {
+            _LOG_I("MQTT MainsMeter: values out of range L1=%d L2=%d L3=%d", L1, L2, L3);
         }
     } else if (topic == MQTTprefix + "/Set/EVMeter") {
         if (EVMeter.Type != EM_API)
             return;
 
         int32_t L1, L2, L3, W, WH;
-        int n = sscanf(payload.c_str(), "%d:%d:%d:%d:%d", &L1, &L2, &L3, &W, &WH);
+        int n;
+        if (payload.indexOf('.') >= 0) {
+            float f1, f2, f3;
+            n = sscanf(payload.c_str(), "%f:%f:%f:%d:%d", &f1, &f2, &f3, &W, &WH);
+            if (n == 5) {
+                L1 = (int32_t)(f1 * 10);
+                L2 = (int32_t)(f2 * 10);
+                L3 = (int32_t)(f3 * 10);
+            }
+        } else {
+            n = sscanf(payload.c_str(), "%d:%d:%d:%d:%d", &L1, &L2, &L3, &W, &WH);
+        }
 
         // We expect 5 values (and accept -1 for unknown values)
         if (n == 5) {
+            _LOG_I("MQTT EVMeter received: L1=%d L2=%d L3=%d W=%d WH=%d (topic=%s)", L1, L2, L3, W, WH, topic.c_str());
             if ((L1 > -1 && L1 < 1000) && (L2 > -1 && L2 < 1000) && (L3 > -1 && L3 < 1000)) {
 #if SMARTEVSE_VERSION < 40 //v3
                 // RMS currents
@@ -693,7 +812,13 @@ void mqtt_receive_callback(const String topic, const String payload) {
                 EVMeter.Import_active_energy = WH;
                 EVMeter.Export_active_energy = 0;
                 EVMeter.UpdateEnergies();
+                if (WH > settingsCache.lastKnownEVImportWh) {
+                    settingsCache.lastKnownEVImportWh = WH;
+                    request_write_settings();
+                }
             }
+        } else {
+            _LOG_I("MQTT EVMeter: parse failed (expected 5 values, got %d); payload='%s'", n, payload.c_str());
         }
     } else if (topic == MQTTprefix + "/Set/HomeBatteryCurrent") {
         if (LoadBl >= 2)
@@ -915,8 +1040,17 @@ void printRFID(char *buf) {
 
 
 void SetupMQTTClient() {
-    // Set up subscriptions
+    // Set up subscriptions (/Set/# covers MainsMeter, EVMeter, Mode, etc.)
+    _LOG_I("MQTT SetupMQTTClient: subscribing to %s/Set/# (covers MainsMeter, EVMeter, Mode, etc.)", MQTTprefix.c_str());
     MQTTclient.subscribe(MQTTprefix + "/Set/#",1);
+    if (MaxCurrentSource == 1 && MaxCurrentMQTTTopic[0] != '\0')
+        MQTTclient.subscribe(String(MaxCurrentMQTTTopic), 1);
+    else if (MaxCurrentSource == 1)
+        _LOG_I("MQTT MaxCurrent: using default topic %s/Set/MaxCurrent (via /Set/#)", MQTTprefix.c_str());
+    if (SolarMeterSource == 1)
+        MQTTclient.subscribe(SolarMeterMQTTTopic[0] != '\0' ? String(SolarMeterMQTTTopic) : MQTTprefix + "/Set/SolarMeter", 1);
+    if (MainsMeter.Type == EM_API && MainsMeterAPISource == 0)
+        _LOG_I("MQTT MainsMeter: expecting data on %s/Set/MainsMeter (L1:L2:L3 dA or f1:f2:f3 A)", MQTTprefix.c_str());
     MQTTclient.publish(MQTTprefix+"/connected", "online", true, 0);
 
     //set the parameters for and announce sensors with device class 'current':
@@ -1048,6 +1182,22 @@ void SetupMQTTClient() {
     MQTTclient.announce("Cable Lock", "select", optional_payload);
 }
 
+/**
+ * Returns value to publish for a total_increasing energy (Wh).
+ * Never returns less than lastKnown once lastKnown > 0, to avoid corrupting HA statistics
+ * when the meter reports 0 due to startup race or comm glitch.
+ */
+static int32_t energyValueToPublish(int32_t currentWh, int32_t &lastKnownWh) {
+    if (lastKnownWh > 0 && currentWh < lastKnownWh) {
+        return lastKnownWh;
+    }
+    if (currentWh > lastKnownWh) {
+        lastKnownWh = currentWh;
+        request_write_settings();
+    }
+    return currentWh;
+}
+
 void mqttPublishData() {
     lastMqttUpdate = 0;
 
@@ -1055,14 +1205,14 @@ void mqttPublishData() {
             MQTTclient.publish(MQTTprefix + "/MainsCurrentL1", MainsMeter.Irms[0], false, 0);
             MQTTclient.publish(MQTTprefix + "/MainsCurrentL2", MainsMeter.Irms[1], false, 0);
             MQTTclient.publish(MQTTprefix + "/MainsCurrentL3", MainsMeter.Irms[2], false, 0);
-            MQTTclient.publish(MQTTprefix + "/MainsImportActiveEnergy", MainsMeter.Import_active_energy, false, 0);
+            MQTTclient.publish(MQTTprefix + "/MainsImportActiveEnergy", energyValueToPublish(MainsMeter.Import_active_energy, settingsCache.lastKnownMainsImportWh), false, 0);
             MQTTclient.publish(MQTTprefix + "/MainsExportActiveEnergy", MainsMeter.Export_active_energy, false, 0);
         }
         if (EVMeter.Type) {
             MQTTclient.publish(MQTTprefix + "/EVCurrentL1", EVMeter.Irms[0], false, 0);
             MQTTclient.publish(MQTTprefix + "/EVCurrentL2", EVMeter.Irms[1], false, 0);
             MQTTclient.publish(MQTTprefix + "/EVCurrentL3", EVMeter.Irms[2], false, 0);
-            MQTTclient.publish(MQTTprefix + "/EVImportActiveEnergy", EVMeter.Import_active_energy, false, 0);
+            MQTTclient.publish(MQTTprefix + "/EVImportActiveEnergy", energyValueToPublish(EVMeter.Import_active_energy, settingsCache.lastKnownEVImportWh), false, 0);
             MQTTclient.publish(MQTTprefix + "/EVExportActiveEnergy", EVMeter.Export_active_energy, false, 0);
         }
         MQTTclient.publish(MQTTprefix + "/ESPTemp", TempEVSE, false, 0);
@@ -1175,7 +1325,7 @@ void mqttSmartEVSEPublishData() {
     if (EVMeter.Type) {
         MQTTclientSmartEVSE.publish(MQTTSmartEVSEprefix + "/EVChargePower", String(EVMeter.PowerMeasured), false, 0);
         MQTTclientSmartEVSE.publish(MQTTSmartEVSEprefix + "/EVEnergyCharged", String(EVMeter.EnergyCharged), true, 0);
-        MQTTclientSmartEVSE.publish(MQTTSmartEVSEprefix + "/EVImportActiveEnergy", String(EVMeter.Import_active_energy), false, 0);
+        MQTTclientSmartEVSE.publish(MQTTSmartEVSEprefix + "/EVImportActiveEnergy", String(energyValueToPublish(EVMeter.Import_active_energy, settingsCache.lastKnownEVImportWh)), false, 0);
     }
     MQTTclientSmartEVSE.publish(MQTTSmartEVSEprefix + "/PairingPin", PairingPin, true, 0);
     MQTTclientSmartEVSE.publish(MQTTSmartEVSEprefix + "/MaxCurrent", String(MaxCurrent * 10), true, 0);
@@ -1312,6 +1462,51 @@ void read_settings() {
         OcppMode = preferences.getUChar("OcppMode", OCPP_MODE);
 #endif //ENABLE_OCPP
 
+        // Home Assistant pull
+        HAEnabled = preferences.getBool("HAEnabled", false);
+        strncpy(HAServerURL, preferences.getString("HAServerURL", "").c_str(), sizeof(HAServerURL) - 1);
+        HAServerURL[sizeof(HAServerURL) - 1] = '\0';
+        HAPort = preferences.getUShort("HAPort", 8123);
+        strncpy(HAToken, preferences.getString("HAToken", "").c_str(), sizeof(HAToken) - 1);
+        HAToken[sizeof(HAToken) - 1] = '\0';
+        HARefreshInterval = (uint16_t)preferences.getUShort("HARefreshInt", 10);
+        if (HARefreshInterval < 5) HARefreshInterval = 5;
+        if (HARefreshInterval > 120) HARefreshInterval = 120;
+
+        MainsMeterAPISource = preferences.getUChar("MainsAPISrc", 0);
+        MainsHAUnit = preferences.getUChar("MainsHAUnit", 0);
+        if (MainsHAUnit > 2) MainsHAUnit = 0;
+        MainsHAVoltage = preferences.getUShort("MainsHAV", 230);
+        if (MainsHAVoltage < 100) MainsHAVoltage = 100;
+        if (MainsHAVoltage > 300) MainsHAVoltage = 300;
+        strncpy(MainsHAEntityL1, preferences.getString("MainsHAE1", "").c_str(), sizeof(MainsHAEntityL1) - 1);
+        MainsHAEntityL1[sizeof(MainsHAEntityL1) - 1] = '\0';
+        strncpy(MainsHAEntityL2, preferences.getString("MainsHAE2", "").c_str(), sizeof(MainsHAEntityL2) - 1);
+        MainsHAEntityL2[sizeof(MainsHAEntityL2) - 1] = '\0';
+        strncpy(MainsHAEntityL3, preferences.getString("MainsHAE3", "").c_str(), sizeof(MainsHAEntityL3) - 1);
+        MainsHAEntityL3[sizeof(MainsHAEntityL3) - 1] = '\0';
+
+        MaxCurrentSource = preferences.getUChar("MaxCurSrc", 0);
+        if (MaxCurrentSource > 2) MaxCurrentSource = 0;
+        strncpy(MaxCurrentMQTTTopic, preferences.getString("MaxCurMqtt", "").c_str(), sizeof(MaxCurrentMQTTTopic) - 1);
+        MaxCurrentMQTTTopic[sizeof(MaxCurrentMQTTTopic) - 1] = '\0';
+        MaxCurrentHAUnit = preferences.getUChar("MaxCurHAUnit", 0);
+        if (MaxCurrentHAUnit > 2) MaxCurrentHAUnit = 0;
+        strncpy(MaxCurrentHAEntity, preferences.getString("MaxCurHAE", "").c_str(), sizeof(MaxCurrentHAEntity) - 1);
+        MaxCurrentHAEntity[sizeof(MaxCurrentHAEntity) - 1] = '\0';
+
+        SolarMeterSource = preferences.getUChar("SolarMtrSrc", 0);
+        if (SolarMeterSource > 2) SolarMeterSource = 0;
+        SolarMeterUnit = preferences.getUChar("SolarMtrUnit", 0);
+        if (SolarMeterUnit > 2) SolarMeterUnit = 0;
+        strncpy(SolarMeterMQTTTopic, preferences.getString("SolarMtrMqtt", "").c_str(), sizeof(SolarMeterMQTTTopic) - 1);
+        SolarMeterMQTTTopic[sizeof(SolarMeterMQTTTopic) - 1] = '\0';
+        strncpy(SolarMeterHAEntity, preferences.getString("SolarMtrHAE", "").c_str(), sizeof(SolarMeterHAEntity) - 1);
+        SolarMeterHAEntity[sizeof(SolarMeterHAEntity) - 1] = '\0';
+
+        settingsCache.lastKnownEVImportWh = preferences.getLong("LastEVImpWh", 0);
+        settingsCache.lastKnownMainsImportWh = preferences.getLong("LastMainsImpWh", 0);
+
         preferences.end();                                  
 
         // Populate settings cache with values just read from NVS
@@ -1367,6 +1562,34 @@ void read_settings() {
 #if ENABLE_OCPP && defined(SMARTEVSE_VERSION)
         settingsCache.OcppMode = OcppMode;
 #endif
+        settingsCache.HAEnabled = HAEnabled;
+        settingsCache.HAPort = HAPort;
+        settingsCache.HARefreshInterval = HARefreshInterval;
+        strncpy(settingsCache.HAServerURL, HAServerURL, sizeof(settingsCache.HAServerURL));
+        settingsCache.HAServerURL[sizeof(settingsCache.HAServerURL) - 1] = '\0';
+        strncpy(settingsCache.HAToken, HAToken, sizeof(settingsCache.HAToken));
+        settingsCache.HAToken[sizeof(settingsCache.HAToken) - 1] = '\0';
+        settingsCache.MainsMeterAPISource = MainsMeterAPISource;
+        settingsCache.MainsHAUnit = MainsHAUnit;
+        settingsCache.MainsHAVoltage = MainsHAVoltage;
+        strncpy(settingsCache.MainsHAEntityL1, MainsHAEntityL1, sizeof(settingsCache.MainsHAEntityL1));
+        settingsCache.MainsHAEntityL1[sizeof(settingsCache.MainsHAEntityL1) - 1] = '\0';
+        strncpy(settingsCache.MainsHAEntityL2, MainsHAEntityL2, sizeof(settingsCache.MainsHAEntityL2));
+        settingsCache.MainsHAEntityL2[sizeof(settingsCache.MainsHAEntityL2) - 1] = '\0';
+        strncpy(settingsCache.MainsHAEntityL3, MainsHAEntityL3, sizeof(settingsCache.MainsHAEntityL3));
+        settingsCache.MainsHAEntityL3[sizeof(settingsCache.MainsHAEntityL3) - 1] = '\0';
+        settingsCache.MaxCurrentSource = MaxCurrentSource;
+        strncpy(settingsCache.MaxCurrentMQTTTopic, MaxCurrentMQTTTopic, sizeof(settingsCache.MaxCurrentMQTTTopic));
+        settingsCache.MaxCurrentMQTTTopic[sizeof(settingsCache.MaxCurrentMQTTTopic) - 1] = '\0';
+        settingsCache.MaxCurrentHAUnit = MaxCurrentHAUnit;
+        strncpy(settingsCache.MaxCurrentHAEntity, MaxCurrentHAEntity, sizeof(settingsCache.MaxCurrentHAEntity));
+        settingsCache.MaxCurrentHAEntity[sizeof(settingsCache.MaxCurrentHAEntity) - 1] = '\0';
+        settingsCache.SolarMeterSource = SolarMeterSource;
+        settingsCache.SolarMeterUnit = SolarMeterUnit;
+        strncpy(settingsCache.SolarMeterMQTTTopic, SolarMeterMQTTTopic, sizeof(settingsCache.SolarMeterMQTTTopic));
+        settingsCache.SolarMeterMQTTTopic[sizeof(settingsCache.SolarMeterMQTTTopic) - 1] = '\0';
+        strncpy(settingsCache.SolarMeterHAEntity, SolarMeterHAEntity, sizeof(settingsCache.SolarMeterHAEntity));
+        settingsCache.SolarMeterHAEntity[sizeof(settingsCache.SolarMeterHAEntity) - 1] = '\0';
         settingsCache.valid = true;
         _LOG_D("Settings cache populated from NVS\n");
 
@@ -1442,6 +1665,69 @@ void write_settings(void) {
 #if ENABLE_OCPP && defined(SMARTEVSE_VERSION) //run OCPP only on ESP32
     PREFS_PUT_UCHAR_IF_CHANGED("OcppMode", OcppMode, OcppMode);
 #endif //ENABLE_OCPP
+
+    // Home Assistant pull
+    PREFS_PUT_BOOL_IF_CHANGED("HAEnabled", HAEnabled, HAEnabled);
+    if (!settingsCache.valid || strcmp(HAServerURL, settingsCache.HAServerURL) != 0) {
+        preferences.putString("HAServerURL", String(HAServerURL));
+        strncpy(settingsCache.HAServerURL, HAServerURL, sizeof(settingsCache.HAServerURL));
+        settingsCache.HAServerURL[sizeof(settingsCache.HAServerURL) - 1] = '\0';
+    }
+    PREFS_PUT_USHORT_IF_CHANGED("HAPort", HAPort, HAPort);
+    if (!settingsCache.valid || strcmp(HAToken, settingsCache.HAToken) != 0) {
+        preferences.putString("HAToken", String(HAToken));
+        strncpy(settingsCache.HAToken, HAToken, sizeof(settingsCache.HAToken));
+        settingsCache.HAToken[sizeof(settingsCache.HAToken) - 1] = '\0';
+    }
+    PREFS_PUT_USHORT_IF_CHANGED("HARefreshInt", HARefreshInterval, HARefreshInterval);
+
+    PREFS_PUT_UCHAR_IF_CHANGED("MainsAPISrc", MainsMeterAPISource, MainsMeterAPISource);
+    PREFS_PUT_UCHAR_IF_CHANGED("MainsHAUnit", MainsHAUnit, MainsHAUnit);
+    PREFS_PUT_USHORT_IF_CHANGED("MainsHAV", MainsHAVoltage, MainsHAVoltage);
+    if (!settingsCache.valid || strcmp(MainsHAEntityL1, settingsCache.MainsHAEntityL1) != 0) {
+        preferences.putString("MainsHAE1", String(MainsHAEntityL1));
+        strncpy(settingsCache.MainsHAEntityL1, MainsHAEntityL1, sizeof(settingsCache.MainsHAEntityL1));
+        settingsCache.MainsHAEntityL1[sizeof(settingsCache.MainsHAEntityL1) - 1] = '\0';
+    }
+    if (!settingsCache.valid || strcmp(MainsHAEntityL2, settingsCache.MainsHAEntityL2) != 0) {
+        preferences.putString("MainsHAE2", String(MainsHAEntityL2));
+        strncpy(settingsCache.MainsHAEntityL2, MainsHAEntityL2, sizeof(settingsCache.MainsHAEntityL2));
+        settingsCache.MainsHAEntityL2[sizeof(settingsCache.MainsHAEntityL2) - 1] = '\0';
+    }
+    if (!settingsCache.valid || strcmp(MainsHAEntityL3, settingsCache.MainsHAEntityL3) != 0) {
+        preferences.putString("MainsHAE3", String(MainsHAEntityL3));
+        strncpy(settingsCache.MainsHAEntityL3, MainsHAEntityL3, sizeof(settingsCache.MainsHAEntityL3));
+        settingsCache.MainsHAEntityL3[sizeof(settingsCache.MainsHAEntityL3) - 1] = '\0';
+    }
+
+    PREFS_PUT_UCHAR_IF_CHANGED("MaxCurSrc", MaxCurrentSource, MaxCurrentSource);
+    if (!settingsCache.valid || strcmp(MaxCurrentMQTTTopic, settingsCache.MaxCurrentMQTTTopic) != 0) {
+        preferences.putString("MaxCurMqtt", String(MaxCurrentMQTTTopic));
+        strncpy(settingsCache.MaxCurrentMQTTTopic, MaxCurrentMQTTTopic, sizeof(settingsCache.MaxCurrentMQTTTopic));
+        settingsCache.MaxCurrentMQTTTopic[sizeof(settingsCache.MaxCurrentMQTTTopic) - 1] = '\0';
+    }
+    PREFS_PUT_UCHAR_IF_CHANGED("MaxCurHAUnit", MaxCurrentHAUnit, MaxCurrentHAUnit);
+    if (!settingsCache.valid || strcmp(MaxCurrentHAEntity, settingsCache.MaxCurrentHAEntity) != 0) {
+        preferences.putString("MaxCurHAE", String(MaxCurrentHAEntity));
+        strncpy(settingsCache.MaxCurrentHAEntity, MaxCurrentHAEntity, sizeof(settingsCache.MaxCurrentHAEntity));
+        settingsCache.MaxCurrentHAEntity[sizeof(settingsCache.MaxCurrentHAEntity) - 1] = '\0';
+    }
+
+    PREFS_PUT_UCHAR_IF_CHANGED("SolarMtrSrc", SolarMeterSource, SolarMeterSource);
+    PREFS_PUT_UCHAR_IF_CHANGED("SolarMtrUnit", SolarMeterUnit, SolarMeterUnit);
+    if (!settingsCache.valid || strcmp(SolarMeterMQTTTopic, settingsCache.SolarMeterMQTTTopic) != 0) {
+        preferences.putString("SolarMtrMqtt", String(SolarMeterMQTTTopic));
+        strncpy(settingsCache.SolarMeterMQTTTopic, SolarMeterMQTTTopic, sizeof(settingsCache.SolarMeterMQTTTopic));
+        settingsCache.SolarMeterMQTTTopic[sizeof(settingsCache.SolarMeterMQTTTopic) - 1] = '\0';
+    }
+    if (!settingsCache.valid || strcmp(SolarMeterHAEntity, settingsCache.SolarMeterHAEntity) != 0) {
+        preferences.putString("SolarMtrHAE", String(SolarMeterHAEntity));
+        strncpy(settingsCache.SolarMeterHAEntity, SolarMeterHAEntity, sizeof(settingsCache.SolarMeterHAEntity));
+        settingsCache.SolarMeterHAEntity[sizeof(settingsCache.SolarMeterHAEntity) - 1] = '\0';
+    }
+
+    PREFS_PUT_LONG_IF_CHANGED("LastEVImpWh", settingsCache.lastKnownEVImportWh, lastKnownEVImportWh);
+    PREFS_PUT_LONG_IF_CHANGED("LastMainsImpWh", settingsCache.lastKnownMainsImportWh, lastKnownMainsImportWh);
 
     // Mark cache as valid after first write
     settingsCache.valid = true;
@@ -1587,7 +1873,37 @@ void DisconnectEvent(void){
 
 // handles URI, returns true if handled, false if not
 bool handle_URI(struct mg_connection *c, struct mg_http_message *hm,  webServerRequest* request) {
-//    if (mg_match(hm->uri, mg_str("/settings"), NULL)) {               // REST API call?
+    // GET /api/validate_ha_entity?entity_id=... — validate HA entity (used by UI with debounce)
+    if (mg_http_match_uri(hm, "/api/validate_ha_entity") && !memcmp("GET", hm->method.buf, hm->method.len)) {
+        if (!request->hasParam("entity_id")) {
+            mg_http_reply(c, 400, "Content-Type: application/json\r\n", "{\"ok\":false,\"error\":\"missing entity_id\"}\n");
+            return true;
+        }
+        String entityId = request->getParam("entity_id")->value();
+        entityId.trim();
+        if (entityId.length() == 0) {
+            _LOG_A("[homeassistant] validate: empty entity_id\n");
+            mg_http_reply(c, 200, "Content-Type: application/json\r\n", "{\"ok\":false,\"error\":\"empty\"}\n");
+            return true;
+        }
+        if (!HAEnabled || HAServerURL[0] == '\0' || HAPort == 0 || HAToken[0] == '\0') {
+            _LOG_A("[homeassistant] validate %s -> ha_not_configured\n", entityId.c_str());
+            mg_http_reply(c, 200, "Content-Type: application/json\r\n", "{\"ok\":false,\"error\":\"ha_not_configured\"}\n");
+            return true;
+        }
+        float dummy;
+        bool found = fetchHAEntityState(HAServerURL, HAPort, HAToken, entityId.c_str(), &dummy);
+        if (found)
+            _LOG_A("[homeassistant] validate %s -> ok\n", entityId.c_str());
+        else
+            _LOG_A("[homeassistant] validate %s -> not_found\n", entityId.c_str());
+        if (found)
+            mg_http_reply(c, 200, "Content-Type: application/json\r\n", "{\"ok\":true}\n");
+        else
+            mg_http_reply(c, 200, "Content-Type: application/json\r\n", "{\"ok\":false,\"error\":\"not_found\"}\n");
+        return true;
+    }
+
     if (mg_http_match_uri(hm, "/settings")) {                            // REST API call?
       if (!memcmp("GET", hm->method.buf, hm->method.len)) {                     // if GET
         String mode = "N/A";
@@ -1760,6 +2076,32 @@ bool handle_URI(struct mg_connection *c, struct mg_http_message *hm,  webServerR
         doc["home_battery"]["current"] = homeBatteryCurrent;
         doc["home_battery"]["last_update"] = homeBatteryLastUpdate;
 
+        // Home Assistant pull connection
+        doc["ha"]["enabled"] = HAEnabled;
+        doc["ha"]["server_url"] = HAServerURL;
+        doc["ha"]["port"] = HAPort;
+        doc["ha"]["token_set"] = (HAToken[0] != '\0');
+        doc["ha"]["refresh_interval"] = HARefreshInterval;
+
+        doc["ha"]["mains_api_source"] = MainsMeterAPISource;
+        doc["ha"]["mains_unit"] = MainsHAUnit;
+        doc["ha"]["mains_voltage"] = MainsHAVoltage;
+        doc["ha"]["mains_entity_l1"] = MainsHAEntityL1;
+        doc["ha"]["mains_entity_l2"] = MainsHAEntityL2;
+        doc["ha"]["mains_entity_l3"] = MainsHAEntityL3;
+
+        doc["max_current_source"] = MaxCurrentSource;
+        doc["max_current_mqtt_topic"] = MaxCurrentMQTTTopic;
+        doc["max_current_ha_unit"] = MaxCurrentHAUnit;
+        doc["max_current_ha_entity"] = MaxCurrentHAEntity;
+
+        doc["solar_meter_source"] = SolarMeterSource;
+        doc["solar_meter_unit"] = SolarMeterUnit;
+        doc["solar_meter_mqtt_topic"] = SolarMeterMQTTTopic;
+        doc["solar_meter_ha_entity"] = SolarMeterHAEntity;
+        doc["solar_meter_value"] = SolarMeterValue;
+        doc["solar_meter_last_update"] = SolarMeterLastUpdate;
+
         doc["ev_meter"]["description"] = EMConfig[EVMeter.Type].Desc;
         doc["ev_meter"]["type"] = EVMeter.Type;
         doc["ev_meter"]["address"] = EVMeter.Address;
@@ -1770,7 +2112,7 @@ bool handle_URI(struct mg_connection *c, struct mg_http_message *hm,  webServerR
         doc["ev_meter"]["currents"]["L1"] = EVMeter.Irms[0];
         doc["ev_meter"]["currents"]["L2"] = EVMeter.Irms[1];
         doc["ev_meter"]["currents"]["L3"] = EVMeter.Irms[2];
-        doc["ev_meter"]["import_active_energy"] = EVMeter.Import_active_energy; // Wh
+        doc["ev_meter"]["import_active_energy"] = energyValueToPublish(EVMeter.Import_active_energy, settingsCache.lastKnownEVImportWh); // Wh
         doc["ev_meter"]["export_active_energy"] = EVMeter.Export_active_energy; // Wh
 
         {
@@ -1780,7 +2122,7 @@ bool handle_URI(struct mg_connection *c, struct mg_http_message *hm,  webServerR
             }
         }
 
-        doc["mains_meter"]["import_active_energy"] = MainsMeter.Import_active_energy; // Wh
+        doc["mains_meter"]["import_active_energy"] = energyValueToPublish(MainsMeter.Import_active_energy, settingsCache.lastKnownMainsImportWh); // Wh
         doc["mains_meter"]["export_active_energy"] = MainsMeter.Export_active_energy; // Wh
         if (MainsMeter.Type == EM_HOMEWIZARD_P1) {
             doc["mains_meter"]["host"] = !homeWizardHost.isEmpty() ? homeWizardHost : "HomeWizard P1 Not Found";
@@ -2047,13 +2389,170 @@ bool handle_URI(struct mg_connection *c, struct mg_http_message *hm,  webServerR
             }
         }
 
+        // Home Assistant pull connection
+        if (request->hasParam("ha_enabled")) {
+            HAEnabled = (request->getParam("ha_enabled")->value().toInt() != 0);
+            doc["ha"]["enabled"] = HAEnabled;
+            request_write_settings();
+        }
+        if (request->hasParam("ha_server_url")) {
+            strncpy(HAServerURL, request->getParam("ha_server_url")->value().c_str(), sizeof(HAServerURL) - 1);
+            HAServerURL[sizeof(HAServerURL) - 1] = '\0';
+            doc["ha"]["server_url"] = HAServerURL;
+            request_write_settings();
+        }
+        if (request->hasParam("ha_port")) {
+            int p = request->getParam("ha_port")->value().toInt();
+            if (p >= 1 && p <= 65535) {
+                HAPort = (uint16_t)p;
+                doc["ha"]["port"] = HAPort;
+                request_write_settings();
+            }
+        }
+        if (request->hasParam("ha_token")) {
+            String t = request->getParam("ha_token")->value();
+            t.trim();
+            // Mongoose decodes query params with + -> space; HA tokens often contain +. Restore it.
+            t.replace(" ", "+");
+            if (t.length() >= sizeof(HAToken)) {
+                _LOG_A("HA token truncated from %u to %u chars\n", (unsigned)t.length(), (unsigned)(sizeof(HAToken) - 1));
+            }
+            strncpy(HAToken, t.c_str(), sizeof(HAToken) - 1);
+            HAToken[sizeof(HAToken) - 1] = '\0';
+            doc["ha"]["token_set"] = (HAToken[0] != '\0');
+            request_write_settings();
+        }
+        if (request->hasParam("ha_refresh_interval")) {
+            int r = request->getParam("ha_refresh_interval")->value().toInt();
+            if (r >= 5 && r <= 120) {
+                HARefreshInterval = (uint16_t)r;
+                doc["ha"]["refresh_interval"] = HARefreshInterval;
+                request_write_settings();
+            }
+        }
+        if (request->hasParam("test_ha") && request->getParam("test_ha")->value().toInt() != 0) {
+            int result = testHomeAssistantConnection(HAServerURL, HAPort, HAToken);
+            doc["ha"]["enabled"] = HAEnabled;
+            doc["ha"]["server_url"] = HAServerURL;
+            doc["ha"]["port"] = HAPort;
+            doc["ha"]["token_set"] = (HAToken[0] != '\0');
+            doc["ha"]["refresh_interval"] = HARefreshInterval;
+            if (result == 0) doc["ha"]["test_result"] = "ok";
+            else if (result == 1) doc["ha"]["test_result"] = "invalid_token";
+            else if (result == 2) doc["ha"]["test_result"] = "not_found";
+            else doc["ha"]["test_result"] = "error";
+        }
+        if (request->hasParam("mains_api_source")) {
+            int v = request->getParam("mains_api_source")->value().toInt();
+            if (v >= 0 && v <= 1) {
+                MainsMeterAPISource = (uint8_t)v;
+                doc["ha"]["mains_api_source"] = MainsMeterAPISource;
+                request_write_settings();
+            }
+        }
+        if (request->hasParam("mains_unit")) {
+            int v = request->getParam("mains_unit")->value().toInt();
+            if (v >= 0 && v <= 2) {
+                MainsHAUnit = (uint8_t)v;
+                doc["ha"]["mains_unit"] = MainsHAUnit;
+                request_write_settings();
+            }
+        }
+        if (request->hasParam("mains_voltage")) {
+            int v = request->getParam("mains_voltage")->value().toInt();
+            if (v >= 100 && v <= 300) {
+                MainsHAVoltage = (uint16_t)v;
+                doc["ha"]["mains_voltage"] = MainsHAVoltage;
+                request_write_settings();
+            }
+        }
+        if (request->hasParam("mains_entity_l1")) {
+            strncpy(MainsHAEntityL1, request->getParam("mains_entity_l1")->value().c_str(), sizeof(MainsHAEntityL1) - 1);
+            MainsHAEntityL1[sizeof(MainsHAEntityL1) - 1] = '\0';
+            doc["ha"]["mains_entity_l1"] = MainsHAEntityL1;
+            request_write_settings();
+        }
+        if (request->hasParam("mains_entity_l2")) {
+            strncpy(MainsHAEntityL2, request->getParam("mains_entity_l2")->value().c_str(), sizeof(MainsHAEntityL2) - 1);
+            MainsHAEntityL2[sizeof(MainsHAEntityL2) - 1] = '\0';
+            doc["ha"]["mains_entity_l2"] = MainsHAEntityL2;
+            request_write_settings();
+        }
+        if (request->hasParam("mains_entity_l3")) {
+            strncpy(MainsHAEntityL3, request->getParam("mains_entity_l3")->value().c_str(), sizeof(MainsHAEntityL3) - 1);
+            MainsHAEntityL3[sizeof(MainsHAEntityL3) - 1] = '\0';
+            doc["ha"]["mains_entity_l3"] = MainsHAEntityL3;
+            request_write_settings();
+        }
+        if (request->hasParam("max_current_source")) {
+            int v = request->getParam("max_current_source")->value().toInt();
+            if (v >= 0 && v <= 2) {
+                MaxCurrentSource = (uint8_t)v;
+                doc["max_current_source"] = MaxCurrentSource;
+                request_write_settings();
+            }
+        }
+        if (request->hasParam("max_current_mqtt_topic")) {
+            strncpy(MaxCurrentMQTTTopic, request->getParam("max_current_mqtt_topic")->value().c_str(), sizeof(MaxCurrentMQTTTopic) - 1);
+            MaxCurrentMQTTTopic[sizeof(MaxCurrentMQTTTopic) - 1] = '\0';
+            doc["max_current_mqtt_topic"] = MaxCurrentMQTTTopic;
+            request_write_settings();
+        }
+        if (request->hasParam("max_current_ha_unit")) {
+            int v = request->getParam("max_current_ha_unit")->value().toInt();
+            if (v >= 0 && v <= 2) {
+                MaxCurrentHAUnit = (uint8_t)v;
+                doc["max_current_ha_unit"] = MaxCurrentHAUnit;
+                request_write_settings();
+            }
+        }
+        if (request->hasParam("max_current_ha_entity")) {
+            strncpy(MaxCurrentHAEntity, request->getParam("max_current_ha_entity")->value().c_str(), sizeof(MaxCurrentHAEntity) - 1);
+            MaxCurrentHAEntity[sizeof(MaxCurrentHAEntity) - 1] = '\0';
+            doc["max_current_ha_entity"] = MaxCurrentHAEntity;
+            request_write_settings();
+        }
+        if (request->hasParam("solar_meter_source")) {
+            int v = request->getParam("solar_meter_source")->value().toInt();
+            if (v >= 0 && v <= 2) {
+                SolarMeterSource = (uint8_t)v;
+                doc["solar_meter_source"] = SolarMeterSource;
+                if (v == 0) { SolarMeterValue = 0; SolarMeterLastUpdate = 0; }
+                request_write_settings();
+            }
+        }
+        if (request->hasParam("solar_meter_unit")) {
+            int v = request->getParam("solar_meter_unit")->value().toInt();
+            if (v >= 0 && v <= 2) {
+                SolarMeterUnit = (uint8_t)v;
+                doc["solar_meter_unit"] = SolarMeterUnit;
+                request_write_settings();
+            }
+        }
+        if (request->hasParam("solar_meter_mqtt_topic")) {
+            strncpy(SolarMeterMQTTTopic, request->getParam("solar_meter_mqtt_topic")->value().c_str(), sizeof(SolarMeterMQTTTopic) - 1);
+            SolarMeterMQTTTopic[sizeof(SolarMeterMQTTTopic) - 1] = '\0';
+            doc["solar_meter_mqtt_topic"] = SolarMeterMQTTTopic;
+            request_write_settings();
+        }
+        if (request->hasParam("solar_meter_ha_entity")) {
+            strncpy(SolarMeterHAEntity, request->getParam("solar_meter_ha_entity")->value().c_str(), sizeof(SolarMeterHAEntity) - 1);
+            SolarMeterHAEntity[sizeof(SolarMeterHAEntity) - 1] = '\0';
+            doc["solar_meter_ha_entity"] = SolarMeterHAEntity;
+            request_write_settings();
+        }
+
         // Expose LCD/menu settings via POST (Phase 1 - WEB_SETTINGS_EXPOSURE)
         // Master-only settings: only accept when LoadBl < 2
         if (LoadBl < 2) {
             if(request->hasParam("current_max")) {
-                int val = request->getParam("current_max")->value().toInt();
-                if (setItemValue(MENU_MAX, val)) doc["current_max"] = getItemValue(MENU_MAX);
-                else doc["current_max"] = "Value not allowed!";
+                if (MaxCurrentSource == 0) {
+                    int val = request->getParam("current_max")->value().toInt();
+                    if (setItemValue(MENU_MAX, val)) doc["current_max"] = getItemValue(MENU_MAX);
+                    else doc["current_max"] = "Value not allowed!";
+                } else {
+                    doc["current_max"] = MaxCurrent;
+                }
             }
             if(request->hasParam("current_main")) {
                 int val = request->getParam("current_main")->value().toInt();
@@ -2348,7 +2847,7 @@ bool handle_URI(struct mg_connection *c, struct mg_http_message *hm,  webServerR
         }
 
         if(MainsMeter.Type == EM_API) {
-            if(request->hasParam("L1") && request->hasParam("L2") && request->hasParam("L3")) {
+            if (MainsMeterAPISource != 1 && request->hasParam("L1") && request->hasParam("L2") && request->hasParam("L3")) {
                 if (LoadBl < 2) {
 #if SMARTEVSE_VERSION < 40 //v3
                     MainsMeter.Irms[0] = request->getParam("L1")->value().toInt();
@@ -2404,6 +2903,10 @@ bool handle_URI(struct mg_connection *c, struct mg_http_message *hm,  webServerR
                 Serial1.printf("@PowerMeasured:%03u,%d\n", EVMeter.Address, (int16_t) request->getParam("import_active_power")->value().toInt());
 #endif
                 EVMeter.UpdateEnergies(); //we dont send the energies to CH32 because they are not used there
+                if (EVMeter.Import_active_energy > settingsCache.lastKnownEVImportWh) {
+                    settingsCache.lastKnownEVImportWh = EVMeter.Import_active_energy;
+                    request_write_settings();
+                }
                 doc["ev_meter"]["import_active_power"] = EVMeter.PowerMeasured;
                 doc["ev_meter"]["import_active_energy"] = EVMeter.Import_active_energy;
                 doc["ev_meter"]["export_active_energy"] = EVMeter.Export_active_energy;
@@ -3570,11 +4073,90 @@ bool fwNeedsUpdate(char * version) {
 #endif
 }
 
+/**
+ * Periodically pulls mains current from Home Assistant entities and updates MainsMeter.Irms.
+ * Only runs when HA pull is enabled, mains meter type is API, and API source is Home Assistant.
+ */
+void homeassistant_loop() {
+    static unsigned long lastCheck_ha = 0;
+    const unsigned long intervalMs = (unsigned long)HARefreshInterval * 1000;
+    const unsigned long currentTime = millis();
+    if (currentTime - lastCheck_ha < intervalMs)
+        return;
+    lastCheck_ha = currentTime;
+
+    const char* ids[] = { MainsHAEntityL1, MainsHAEntityL2, MainsHAEntityL3 };
+    bool anyOk = false;
+    float vNom = (MainsHAVoltage >= 100 && MainsHAVoltage <= 300) ? (float)MainsHAVoltage : 230.0f;
+    for (int i = 0; i < 3; i++) {
+        if (!ids[i] || ids[i][0] == '\0') continue;
+        float val = 0;
+        if (!fetchHAEntityState(HAServerURL, HAPort, HAToken, ids[i], &val))
+            continue;
+        // Convert to amps based on configured unit: 0 = A, 1 = W, 2 = kW
+        if (MainsHAUnit == 1 && vNom > 0.0f)
+            val = val / vNom;
+        else if (MainsHAUnit == 2 && vNom > 0.0f)
+            val = (val * 1000.0f) / vNom;
+        if (val < -200.0f) val = -200.0f;
+        if (val > 200.0f) val = 200.0f;
+        int16_t deciA = (int16_t)(val * 10);
+        MainsMeter.Irms[i] = deciA;
+        anyOk = true;
+    }
+    if (anyOk) {
+#if SMARTEVSE_VERSION < 40 //v3
+        CalcIsum();
+        MainsMeter.setTimeout(COMM_TIMEOUT);
+#else
+        Serial1.printf("@Irms:%03u,%d,%d,%d\n", MainsMeter.Address, MainsMeter.Irms[0], MainsMeter.Irms[1], MainsMeter.Irms[2]);
+#endif
+    }
+
+    // Max current from HA entity (when source is HA)
+    if (MaxCurrentSource == 2 && MaxCurrentHAEntity[0] != '\0' && HAServerURL[0] && HAPort && HAToken[0]) {
+        float val = 0;
+        if (fetchHAEntityState(HAServerURL, HAPort, HAToken, MaxCurrentHAEntity, &val)) {
+            float vNom = (MainsHAVoltage >= 100 && MainsHAVoltage <= 300) ? (float)MainsHAVoltage : 230.0f;
+            if (MaxCurrentHAUnit == 1 && vNom > 0.0f)
+                val = val / vNom;
+            else if (MaxCurrentHAUnit == 2 && vNom > 0.0f)
+                val = (val * 1000.0f) / vNom;
+            if (val < 6.0f) val = 6.0f;
+            if (val > 80.0f) val = 80.0f;
+            uint16_t newMax = (uint16_t)(val + 0.5f);
+            if (newMax != MaxCurrent) {
+                MaxCurrent = newMax;
+                SEND_TO_CH32(MaxCurrent)
+            }
+        }
+    }
+
+    // Solar meter from HA entity (when source is HA, ready for future use)
+    if (SolarMeterSource == 2 && SolarMeterHAEntity[0] != '\0' && HAServerURL[0] && HAPort && HAToken[0]) {
+        float val = 0;
+        if (fetchHAEntityState(HAServerURL, HAPort, HAToken, SolarMeterHAEntity, &val)) {
+            float vNom = (MainsHAVoltage >= 100 && MainsHAVoltage <= 300) ? (float)MainsHAVoltage : 230.0f;
+            if (SolarMeterUnit == 1 && vNom > 0.0f)
+                val = val / vNom;
+            else if (SolarMeterUnit == 2 && vNom > 0.0f)
+                val = (val * 1000.0f) / vNom;
+            if (val < 0.0f) val = 0.0f;
+            if (val > 200.0f) val = 200.0f;
+            SolarMeterValue = (int16_t)(val * 10);
+            SolarMeterLastUpdate = time(NULL);
+        }
+    }
+}
+
 void loop() {
 
     network_loop();
     if (MainsMeter.Type == EM_HOMEWIZARD_P1 && LoadBl < 2) {
         homewizard_loop();
+    }
+    if (HAEnabled && LoadBl < 2 && ((MainsMeter.Type == EM_API && MainsMeterAPISource == 1) || MaxCurrentSource == 2 || SolarMeterSource == 2)) {
+        homeassistant_loop();
     }
     
     static unsigned long lastCheck = 0;
