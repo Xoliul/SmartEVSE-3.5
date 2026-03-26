@@ -356,6 +356,11 @@
             if (data.settings.current_main !== undefined) $('#evse_config_current_main').val(data.settings.current_main);
             if (data.evse.loadbl !== undefined) $('#evse_config_loadbl').val(String(data.evse.loadbl));
             if (data.settings.grid !== undefined) $('#evse_config_grid').val(String(data.settings.grid));
+            if (data.settings.enable_C2 !== undefined) {
+              var enableC2Map = {"Not present":"0","Always Off":"1","Solar Off":"2","Always On":"3","Auto":"4"};
+              var ec2 = enableC2Map[data.settings.enable_C2];
+              if (ec2 !== undefined) $('#evse_config_enable_c2').val(ec2);
+            }
             if (data.settings.sb2_wifi !== undefined) $('#evse_config_sb2_wifi').val(String(data.settings.sb2_wifi));
             if (data.settings.mains_meter_type !== undefined) $('#evse_config_mains_meter_type').val(String(data.settings.mains_meter_type));
             if (data.settings.mains_meter_address !== undefined) $('#evse_config_mains_meter_address').val(data.settings.mains_meter_address);
@@ -655,7 +660,7 @@
       $(document).on('change', '#mqtt_tls', toggleCertVisibility);
 
       // Mark EVSE config / solar / override as dirty when user edits (so poll never overwrites)
-      $(document).on('change input', '#evse_config_section select, #evse_config_section input, #solar_start_current, #solar_max_import_current, #solar_stop_time, #mode_override_current', function() {
+      $(document).on('change input', '#evse_config_section select, #evse_config_section input, #solar_start_current, #solar_max_import_current, #solar_stop_time, #mode_override_current, #evse_config_enable_c2', function() {
         evseFormDirty = true;
         var $mainsType = $('#evse_config_mains_meter_type');
         if ($mainsType.length && $(this).attr('id') === 'evse_config_mains_meter_type') {
@@ -1805,6 +1810,7 @@
                       add("current_main", "evse_config_current_main");
                       add("loadbl", "evse_config_loadbl");
                       add("grid", "evse_config_grid");
+                      add("enable_C2", "evse_config_enable_c2");
                       add("sb2_wifi", "evse_config_sb2_wifi");
                       add("mains_meter_type", "evse_config_mains_meter_type");
                       add("mains_meter_address", "evse_config_mains_meter_address");
@@ -2161,6 +2167,10 @@
                                         <div class="row no-gutters align-items-center">
                                             <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">Grid:</div>
                                             <div class="col" style="max-width:425px;"><select id="evse_config_grid"><option value="0">4Wire</option><option value="1">3Wire</option></select></div>
+                                        </div>
+                                        <div class="row no-gutters align-items-center">
+                                            <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">Contactor 2:</div>
+                                            <div class="col" style="max-width:425px;"><select id="evse_config_enable_c2" title="1P vs 3P charging: Always Off/Solar Off = 1-phase, Auto = switch by solar surplus"><option value="0">Not present</option><option value="1">Always Off</option><option value="2">Solar Off</option><option value="3">Always On</option><option value="4">Auto</option></select></div>
                                         </div>
                                         <div class="row no-gutters align-items-center">
                                             <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">SB2 WiFi:</div>

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="House" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 600 600">
+  <defs>
+    <linearGradient id="linear-gradient" x1="304.5615" y1="304.7179" x2="305.4157" y2="449.5036" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#abadb0"/>
+      <stop offset="1" stop-color="#86888a"/>
+    </linearGradient>
+  </defs>
+  <path d="M127.5265,350.7428l-12.931-17.7985,189.8833-137.9539.1906.2623.1905-.2623,82.1402,59.6765v-35.4091h38v63.0168l69.7432,50.6697-12.9312,17.7985-177.1427-128.6976-177.1428,128.6976ZM402.3334,420.591v-62h-68.6667v62h68.6667ZM463.6667,481.9243v-129.3333h-24.6667v129.3333H169.6667v-129.3333h-24.6667v129.3333h-45.3333v20.2484h412.0001v-20.2484h-48ZM297,475.5058v-116.9147h-58v116.9147h58Z" style="fill: url(#linear-gradient); stroke: #fff; stroke-miterlimit: 10;"/>
+</svg>

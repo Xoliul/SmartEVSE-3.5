@@ -2293,9 +2293,14 @@ bool handle_URI(struct mg_connection *c, struct mg_http_message *hm,  webServerR
             doc["mode"] = mode;
         }
 
-        if(request->hasParam("enable_C2")) {
-            EnableC2 = (EnableC2_t) request->getParam("enable_C2")->value().toInt();
-            doc["settings"]["enable_C2"] = StrEnableC2[EnableC2];
+        if(request->hasParam("enable_C2") && LoadBl < 2) {
+            int v = request->getParam("enable_C2")->value().toInt();
+            if (v >= 0 && v <= 4) {
+                EnableC2 = (EnableC2_t) v;
+                doc["settings"]["enable_C2"] = StrEnableC2[EnableC2];
+                SEND_TO_CH32(EnableC2);
+                request_write_settings();
+            }
         }
 
         if(request->hasParam("stop_timer")) {

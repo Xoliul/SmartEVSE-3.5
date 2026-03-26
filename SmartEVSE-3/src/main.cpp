@@ -1082,7 +1082,11 @@ char IsCurrentAvailable(void) {
             time_t now = time(NULL);
             bool smValid = (SolarMeterValue >= 0 && SolarMeterValue <= 2000 && (now - SolarMeterLastUpdate) < 90);
             if (smValid) {
-                int houseLoad = MainsMeter.Imeasured - TotalCurrent;
+                // When importing: Isum = House+EV (positive). houseLoad = Isum - TotalCurrent = House.
+                // When exporting: Isum = -(Export) (negative). House = Solar - EV - Export = SolarMeterValue - TotalCurrent + Isum.
+                // Use Isum (not Imeasured): Imeasured is max of phases, so with L1=-4A L2=L3=0 it becomes 0 and breaks the formula.
+                int houseLoad = Isum - TotalCurrent;
+                if (houseLoad < 0) houseLoad = SolarMeterValue + Isum - TotalCurrent;  // export: derive House from Solar - EV - Export
                 if (houseLoad < 0) houseLoad = 0;
                 int availableSurplus = SolarMeterValue - houseLoad;
                 effectiveIsum = (int16_t)(-availableSurplus);
@@ -1242,7 +1246,11 @@ void CalcBalancedCurrent(char mod) {
             time_t now = time(NULL);
             bool smValid = (SolarMeterValue >= 0 && SolarMeterValue <= 2000 && (now - SolarMeterLastUpdate) < 90);
             if (smValid) {
-                int houseLoad = MainsMeter.Imeasured - TotalCurrent;
+                // When importing: Isum = House+EV (positive). houseLoad = Isum - TotalCurrent = House.
+                // When exporting: Isum = -(Export) (negative). House = Solar - EV - Export = SolarMeterValue - TotalCurrent + Isum.
+                // Use Isum (not Imeasured): Imeasured is max of phases, so with L1=-4A L2=L3=0 it becomes 0 and breaks the formula.
+                int houseLoad = Isum - TotalCurrent;
+                if (houseLoad < 0) houseLoad = SolarMeterValue + Isum - TotalCurrent;  // export: derive House from Solar - EV - Export
                 if (houseLoad < 0) houseLoad = 0;
                 int availableSurplus = SolarMeterValue - houseLoad;
                 effectiveIsum = (int16_t)(-availableSurplus);
@@ -1362,6 +1370,14 @@ void CalcBalancedCurrent(char mod) {
     // Note: all boundary rules must be duplicated to check for HARD shortage of power
     // HARD shortage of power: boundaries are exceeded, we must stop charging!
     // SOFT shortage of power: we have timers running to stop charging in the future
+    // guard solar surplus: only when using SolarMeter (SolarMeterSource != 0). With SolarMeter, effectiveIsum = -availableSurplus
+    // (solar - house), so we cap at that. With grid (Isum), effectiveIsum = Isum; when exporting, -Isum = export amount,
+    // which means "could add X more" - capping at that would wrongly force reduction and cause oscillation.
+    if (Mode == MODE_SOLAR && SolarMeterSource != 0 && effectiveIsum < 0) {
+        int allowedTotal = (-effectiveIsum) + (10 * ImportCurrent);  // surplus + allowed grid import
+        int allowedPerPhase = allowedTotal / Nr_Of_Phases_Charging;
+        IsetBalanced = min((int) IsetBalanced, allowedPerPhase);
+    }
     // guard MaxMains
     if (MainsMeter.Type && Mode != MODE_NORMAL)
         IsetBalanced = min((int) IsetBalanced, (MaxMains * 10) - Baseload); //limiting is per phase so no Nr_Of_Phases_Charging here!
@@ -1386,7 +1402,21 @@ void CalcBalancedCurrent(char mod) {
 
             // ############### shortage of power  #################
 
-            IsetBalanced = ActiveEVSE * MinCurrent * 10;                        // retain old software behaviour: set minimal "MinCurrent" charge per active EVSE
+            // Solar mode with solar meter: if surplus/3 < MinCurrent on 3-phase, switching to 1-phase lets us use full surplus
+            if (Mode == MODE_SOLAR && SolarMeterSource != 0 && Nr_Of_Phases_Charging == 3 && EnableC2 == AUTO && State == STATE_C
+                && effectiveIsum < 0 && ((-effectiveIsum) / 3) < (ActiveEVSE * MinCurrent * 10)) {
+                _LOG_A("Solar surplus %.1fA too low for 3P (%.1fA/phase < MinCurrent); switching to 1P.\n", (float)(-effectiveIsum)/10, (float)(-effectiveIsum)/30);
+                Switching_Phases_C2 = GOING_TO_SWITCH_1P;
+                setState(STATE_C1);
+            }
+            // Solar surplus < MinCurrent and no grid import allowed: stop (0A) instead of bumping to MinCurrent
+            bool surplusTooLowNoImport = (Mode == MODE_SOLAR && SolarMeterSource != 0 && effectiveIsum < 0
+                && (-effectiveIsum) < (ActiveEVSE * MinCurrent * 10) && ImportCurrent == 0);
+            if (surplusTooLowNoImport) {
+                IsetBalanced = 0;                                               // EV cannot charge below MinCurrent; stop instead of importing
+            } else {
+                IsetBalanced = ActiveEVSE * MinCurrent * 10;                    // retain old software behaviour: set minimal "MinCurrent" charge per active EVSE
+            }
             if (Mode == MODE_SOLAR) {
                 // ----------- Check to see if we have to continue charging on solar power alone ----------
                                               // Importing too much?
@@ -1426,7 +1456,7 @@ void CalcBalancedCurrent(char mod) {
             // with HARD shortage we stop charging
             // with SOFT shortage we have a timer running
             // IsetBalanced is already set to the minimum needed power to charge all Nodes
-            bool hardShortage = false;
+            bool hardShortage = surplusTooLowNoImport;
             // guard MaxMains
             if (MainsMeter.Type && Mode != MODE_NORMAL)
                 if (IsetBalanced > (MaxMains * 10) - Baseload)

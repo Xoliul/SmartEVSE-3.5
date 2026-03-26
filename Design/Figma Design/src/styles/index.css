@@ -1,0 +1,55 @@
+@import './fonts.css';
+@import './tailwind.css';
+@import './theme.css';
+
+/* Custom slider styling for range input */
+input[type="range"].slider {
+  -webkit-appearance: none;
+  appearance: none;
+  outline: none;
+  border-radius: 9999px;
+}
+
+input[type="range"].slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #4A9EFF 0%, #3A8EEF 100%);
+  cursor: pointer;
+  border: 3px solid #0f1924;
+  box-shadow: 0 2px 8px rgba(74, 158, 255, 0.4);
+  transition: all 0.2s ease;
+}
+
+input[type="range"].slider::-webkit-slider-thumb:hover {
+  transform: scale(1.1);
+  box-shadow: 0 4px 12px rgba(74, 158, 255, 0.6);
+}
+
+input[type="range"].slider::-moz-range-thumb {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #4A9EFF 0%, #3A8EEF 100%);
+  cursor: pointer;
+  border: 3px solid #0f1924;
+  box-shadow: 0 2px 8px rgba(74, 158, 255, 0.4);
+  transition: all 0.2s ease;
+}
+
+input[type="range"].slider::-moz-range-thumb:hover {
+  transform: scale(1.1);
+  box-shadow: 0 4px 12px rgba(74, 158, 255, 0.6);
+}
+
+input[type="range"].slider::-webkit-slider-runnable-track {
+  height: 8px;
+  border-radius: 9999px;
+}
+
+input[type="range"].slider::-moz-range-track {
+  height: 8px;
+  border-radius: 9999px;
+}
