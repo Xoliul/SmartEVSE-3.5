@@ -354,6 +354,9 @@
             else if (maxCurSrc === 1) { $('#max_current_static_row').hide(); $('#max_current_mqtt_row').show(); $('#max_current_ha_row').hide(); $('#evse_config_current_max').prop('disabled', true); }
             else { $('#max_current_static_row').hide(); $('#max_current_mqtt_row').hide(); $('#max_current_ha_row').show(); $('#evse_config_current_max').prop('disabled', true); }
             if (data.settings.current_main !== undefined) $('#evse_config_current_main').val(data.settings.current_main);
+            if (data.settings.current_max_sum_mains !== undefined) $('#evse_config_current_max_sum_mains').val(data.settings.current_max_sum_mains);
+            if (data.settings.dynamic_grid_import_limit !== undefined) $('#dynamic_grid_import_limit_value').text(data.settings.dynamic_grid_import_limit + ' A');
+            else $('#dynamic_grid_import_limit_value').text('0 A');
             if (data.evse.loadbl !== undefined) $('#evse_config_loadbl').val(String(data.evse.loadbl));
             if (data.settings.grid !== undefined) $('#evse_config_grid').val(String(data.settings.grid));
             if (data.settings.enable_C2 !== undefined) {
@@ -380,6 +383,13 @@
             if (data.evse.loadbl >= 2) $('#evse_config_master_only').find('select, input').prop('disabled', true);
             else $('#evse_config_master_only').find('select, input').prop('disabled', false);
             if (data.mqtt) $('#evse_config_app_server_row').show(); else $('#evse_config_app_server_row').hide();
+            var gridLimitPrefix = (data.mqtt && data.mqtt.topic_prefix) ? data.mqtt.topic_prefix : '{prefix}';
+            $('#grid_import_limit_topic').text(gridLimitPrefix + '/Set/GridImportLimit');
+            $('#grid_import_limit_status').text(
+              'Static ' + ((data.settings.current_max_sum_mains !== undefined) ? data.settings.current_max_sum_mains : 0) +
+              ' A, dynamic ' + ((data.settings.dynamic_grid_import_limit !== undefined) ? data.settings.dynamic_grid_import_limit : 0) +
+              ' A, effective ' + ((data.settings.effective_grid_import_limit !== undefined) ? data.settings.effective_grid_import_limit : 0) + ' A'
+            );
             if (data.ha) {
               $('#ha_enabled').prop('checked', data.ha.enabled).checkboxradio('refresh');
               $('#ha_server_url').val(data.ha.server_url || '');
@@ -1808,6 +1818,7 @@
                       add("max_current_ha_unit", "max_current_ha_unit");
                       params.push("max_current_ha_entity=" + encodeURIComponent($('#max_current_ha_entity').val() || ''));
                       add("current_main", "evse_config_current_main");
+                      add("current_max_sum_mains", "evse_config_current_max_sum_mains");
                       add("loadbl", "evse_config_loadbl");
                       add("grid", "evse_config_grid");
                       add("enable_C2", "evse_config_enable_c2");
@@ -1843,6 +1854,9 @@
                       }
                       if (params.length === 0) return;
                       $.post("/settings?" + params.join("&")).then(function() { evseFormDirty = false; loadData(true); alert("EVSE configuration saved."); }).fail(function() { alert("Save failed."); });
+                    }
+                    function clearGridImportLimit() {
+                      $.post("/settings?dynamic_grid_import_limit=0").then(function() { loadData(true); }).fail(function() { alert("Clear failed."); });
                     }
                     function testHaConnection() {
                       var params = ["test_ha=1"];
@@ -2118,14 +2132,14 @@
                                             <div class="col" style="max-width:425px;"><select id="evse_config_lock"><option value="0">Disabled</option><option value="1">Solenoid</option><option value="2">Motor</option></select></div>
                                         </div>
                                         <div class="row no-gutters align-items-center">
-                                            <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">Max current source:</div>
+                                            <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">Charger max source:</div>
                                             <div class="col" style="max-width:425px;"><select id="max_current_source"><option value="0">Static</option><option value="1">MQTT</option><option value="2">Home Assistant</option></select></div>
                                         </div>
                                         <div id="max_current_static_row" class="evse-config-sub">
-                                        <div class="row no-gutters align-items-center">
-                                            <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">Max current (A):</div>
+                                            <div class="row no-gutters align-items-center">
+                                            <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">Charger max (A):</div>
                                             <div class="col" style="max-width:425px;"><input type="number" id="evse_config_current_max" min="6" max="80" style="width:80px;" class="ui-corner-all ui-shadow-inset"> per phase</div>
-                                        </div>
+                                            </div>
                                         </div>
                                         <div id="max_current_mqtt_row" class="evse-config-sub" style="display:none;">
                                             <div class="row no-gutters align-items-center">
@@ -2133,7 +2147,7 @@
                                                 <div class="col" style="max-width:425px;"><input type="text" id="max_current_mqtt_topic" placeholder="{prefix}/Set/MaxCurrent" style="width:280px;" class="ui-corner-all ui-shadow-inset"></div>
                                             </div>
                                             <div class="row no-gutters align-items-center text-muted small ml-2 mt-1">
-                                                <div class="col" style="max-width:500px;">Configure your broker, Node-RED or Home Assistant to publish to this topic. Payload: amps as integer (6–80). Empty topic = <code>{prefix}/Set/MaxCurrent</code>.</div>
+                                                <div class="col" style="max-width:500px;">Controls the charger output cap, not grid import. Payload: amps as integer (6–80). Empty topic = <code>{prefix}/Set/MaxCurrent</code>.</div>
                                             </div>
                                         </div>
                                         <div id="max_current_ha_row" class="evse-config-sub" style="display:none;">
@@ -2163,6 +2177,17 @@
                                         <div class="row no-gutters align-items-center">
                                             <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">Mains max (A):</div>
                                             <div class="col" style="max-width:425px;"><input type="number" id="evse_config_current_main" min="10" max="200" style="width:80px;" class="ui-corner-all ui-shadow-inset"> per phase</div>
+                                        </div>
+                                        <div class="row no-gutters align-items-center">
+                                            <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">Grid sum max (A):</div>
+                                            <div class="col" style="max-width:425px;"><input type="number" id="evse_config_current_max_sum_mains" min="0" max="600" style="width:80px;" class="ui-corner-all ui-shadow-inset"> static ceiling, 0 disables</div>
+                                        </div>
+                                        <div class="row no-gutters align-items-center">
+                                            <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">Grid import limit:</div>
+                                            <div class="col" style="max-width:425px;"><span id="dynamic_grid_import_limit_value">0 A</span> dynamic peak <button type="button" class="ui-btn ui-mini ui-corner-all ui-shadow ml-2" onclick="clearGridImportLimit()" style="display:inline-block;">Clear</button></div>
+                                        </div>
+                                        <div class="row no-gutters align-items-center text-muted small ml-2 mt-1">
+                                            <div class="col" style="max-width:620px;">MQTT topic: <code id="grid_import_limit_topic">{prefix}/Set/GridImportLimit</code>. Payload must include a unit: <code>10A</code>, <code>2500W</code>, or <code>2.5kW</code>. Send <code>0</code> to disable. <span id="grid_import_limit_status"></span>.</div>
                                         </div>
                                         <div class="row no-gutters align-items-center">
                                             <div class="col-auto h5 mb-0 mr-3 font-weight-bold text-gray-800" style="width: 120px;">Grid:</div>

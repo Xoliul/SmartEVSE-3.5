@@ -126,6 +126,7 @@ uint16_t MaxSumMains = MAX_SUMMAINS;                                        // M
                                                                             // 0 means disabled, allowed value 10 - 600 A
 uint8_t MaxSumMainsTime = MAX_SUMMAINSTIME;                                 // Number of Minutes we wait when MaxSumMains is exceeded, before we stop charging
 uint16_t MaxSumMainsTimer = 0;
+uint16_t DynamicGridImportLimit = DYNAMIC_GRID_IMPORT_LIMIT;                 // MQTT-fed MaxSumMains-style limit, 0 means disabled
 uint16_t GridRelayMaxSumMains = GRID_RELAY_MAX_SUMMAINS;                    // Max Mains Amps summed over all 3 phases, switched by relay provided by energy provider
                                                                             // Meant to obey par 14a of Energy Industry Act, where the provider can switch a device
                                                                             // down to 4.2kW by a relay connected to the "switch" connectors.
@@ -1051,6 +1052,14 @@ uint8_t Pilot() {
 }
 #endif
 
+uint16_t getEffectiveMaxSumMains(void) {
+    if (MaxSumMains && DynamicGridImportLimit)
+        return min(MaxSumMains, DynamicGridImportLimit);
+    if (DynamicGridImportLimit)
+        return DynamicGridImportLimit;
+    return MaxSumMains;
+}
+
 #if !defined(SMARTEVSE_VERSION) || SMARTEVSE_VERSION >=30 && SMARTEVSE_VERSION < 40   //CH32 and v3 ESP32
 // Is there at least 6A(configurable MinCurrent) available for a new EVSE?
 // Look whether there would be place for one more EVSE if we could lower them all down to MinCurrent
@@ -1142,8 +1151,9 @@ char IsCurrentAvailable(void) {
     // When using PowerSharing, we do not know the configuration of the nodes, assume 1 Phase
     uint8_t Phases = 1;
     if (LoadBl == 0) Phases = Force_Single_Phase_Charging() ? 1 : 3;
-    if (Mode != MODE_NORMAL && MaxSumMains && ((Phases * ActiveEVSE * MinCurrent * 10) + Isum > MaxSumMains * 10)) {
-        //printf("@MSG: No current available MaxSumMains line %d. ActiveEVSE=%u, MinCurrent=%uA, Isum=%d.%dA, MaxSumMains=%uA.\n", __LINE__, ActiveEVSE, MinCurrent, Isum/10, abs(Isum%10), MaxSumMains);
+    uint16_t EffectiveMaxSumMains = getEffectiveMaxSumMains();
+    if (Mode != MODE_NORMAL && EffectiveMaxSumMains && ((Phases * ActiveEVSE * MinCurrent * 10) + Isum > EffectiveMaxSumMains * 10)) {
+        //printf("@MSG: No current available MaxSumMains line %d. ActiveEVSE=%u, MinCurrent=%uA, Isum=%d.%dA, EffectiveMaxSumMains=%uA.\n", __LINE__, ActiveEVSE, MinCurrent, Isum/10, abs(Isum%10), EffectiveMaxSumMains);
         return 0;                                                           // Not enough current available!, return with error
     }
 
@@ -1298,12 +1308,13 @@ void CalcBalancedCurrent(char mod) {
             Idifference = min((MaxMains * 10) - MainsMeter.Imeasured, (MaxCircuit * 10) - EVMeter.Imeasured);
         else
             Idifference = (MaxMains * 10) - MainsMeter.Imeasured;
-        int ExcessMaxSumMains = ((MaxSumMains * 10) - Isum);// /Nr_Of_Phases_Charging;
-        if (MaxSumMains) {
+        uint16_t EffectiveMaxSumMains = getEffectiveMaxSumMains();
+        int ExcessMaxSumMains = ((EffectiveMaxSumMains * 10) - Isum);// /Nr_Of_Phases_Charging;
+        if (EffectiveMaxSumMains) {
             Idifference = ExcessMaxSumMains;
             if (ExcessMaxSumMains < 0) {                                       // No ExcessMaxSumMains, we stop charging if MaxSumMains (Capacity) is set
                 LimitedByMaxSumMains = true;
-                _LOG_V("Current is limited by MaxSumMains: MaxSumMains=%uA, Isum=%d.%dA, Nr_Of_Phases_Charging=%u.\n", MaxSumMains, Isum/10, abs(Isum%10), Nr_Of_Phases_Charging);
+                _LOG_V("Current is limited by MaxSumMains: EffectiveMaxSumMains=%uA, MaxSumMains=%uA, DynamicGridImportLimit=%uA, Isum=%d.%dA, Nr_Of_Phases_Charging=%u.\n", EffectiveMaxSumMains, MaxSumMains, DynamicGridImportLimit, Isum/10, abs(Isum%10), Nr_Of_Phases_Charging);
             } else {
                 LimitedByMaxSumMains = false;
                 MaxSumMainsTimer = 0;
@@ -1358,8 +1369,11 @@ void CalcBalancedCurrent(char mod) {
                                                                                 // taken into account
 
                 IsetBalanced = min((MaxMains * 10) - Baseload, (MaxCircuit * 10 ) - Baseload_EV ); //assume the current should be available on all 3 phases
-                if (MaxSumMains)
-                    IsetBalanced = min((int) IsetBalanced, ((MaxSumMains * 10) - Isum)/3); //assume the current should be available on all 3 phases
+                uint16_t EffectiveMaxSumMains = getEffectiveMaxSumMains();
+                if (EffectiveMaxSumMains) {
+                    uint8_t SumLimitPhases = (LoadBl == 0 && Force_Single_Phase_Charging()) ? 1 : 3;
+                    IsetBalanced = min((int) IsetBalanced, ((EffectiveMaxSumMains * 10) - Isum) / SumLimitPhases);
+                }
                 _LOG_V("Checkpoint 3 Smart Isetbalanced=%d.%d A, IsumImport=%d.%d, Isum=%d.%d, ImportCurrent=%u.\n", IsetBalanced/10, abs(IsetBalanced%10), IsumImport/10, abs(IsumImport%10), Isum/10, abs(Isum%10), ImportCurrent);
             }
         } //end MODE_SMART
@@ -2449,6 +2463,7 @@ void CheckSerialComm(void) {
     SET_ON_RECEIVE(LoadBl:, LoadBl)
     SET_ON_RECEIVE(MaxMains:, MaxMains)
     SET_ON_RECEIVE(MaxSumMains:, MaxSumMains)
+    SET_ON_RECEIVE(DynamicGridImportLimit:, DynamicGridImportLimit)
     SET_ON_RECEIVE(MaxCurrent:, MaxCurrent)
     SET_ON_RECEIVE(MinCurrent:, MinCurrent)
     SET_ON_RECEIVE(MaxCircuit:, MaxCircuit)
@@ -2961,6 +2976,7 @@ void SendConfigToCH32() {
     SEND_TO_CH32(MaxCurrent)
     SEND_TO_CH32(MaxMains)
     SEND_TO_CH32(MaxSumMains)
+    SEND_TO_CH32(DynamicGridImportLimit)
     SEND_TO_CH32(MaxSumMainsTime)
     SEND_TO_CH32(maxTemp)
     SEND_TO_CH32(MinCurrent)

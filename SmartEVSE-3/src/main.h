@@ -77,6 +77,7 @@
 #define MAX_MAINS 25                                                            // max Current the Mains connection can supply
 #define MAX_SUMMAINS 0                                                          // only used for capacity rate limiting, max current over the sum of all phases
 #define MAX_SUMMAINSTIME 0
+#define DYNAMIC_GRID_IMPORT_LIMIT 0                                             // MQTT-fed max grid import current summed over all phases, 0=disabled
 #define GRID_RELAY_MAX_SUMMAINS 18                                              // only used for rate limiting by grid switched relay,
                                                                                 // max current over the sum of all phases
                                                                                 // 6A * 3 phases * 230V = 4140W, law says 4.2kW ...
@@ -339,6 +340,7 @@ struct Sensorbox {
 
 uint8_t setItemValue(uint8_t nav, uint16_t val);
 uint16_t getItemValue(uint8_t nav);
+uint16_t getEffectiveMaxSumMains(void);
 
 enum EnableC2_t { NOT_PRESENT, ALWAYS_OFF, SOLAR_OFF, ALWAYS_ON, AUTO };
 extern EnableC2_t EnableC2;

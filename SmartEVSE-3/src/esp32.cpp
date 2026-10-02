@@ -267,6 +267,7 @@ extern uint16_t MaxSumMains;
                                                                             // 0 means disabled, allowed value 10 - 600 A
 extern uint8_t MaxSumMainsTime;
 extern uint16_t MaxSumMainsTimer;
+extern uint16_t DynamicGridImportLimit;
 extern uint16_t GridRelayMaxSumMains;
                                                                             // Meant to obey par 14a of Energy Industry Act, where the provider can switch a device
                                                                             // down to 4.2kW by a relay connected to the "switch" connectors.
@@ -637,6 +638,45 @@ void writeMqttCaCert(const String& cert) {
     _LOG_D("Wrote %d bytes to /mqtt_ca.pem.\n", cert.length());
 }
 
+static bool parseGridImportLimitPayload(const String& payload, uint16_t* limitA) {
+    String value = payload;
+    value.trim();
+    if (value.length() == 0 || limitA == nullptr)
+        return false;
+
+    String lower = value;
+    lower.toLowerCase();
+
+    float numeric = lower.toFloat();
+    if (numeric < 0.0f)
+        return false;
+
+    if (numeric == 0.0f) {
+        *limitA = 0;
+        return true;
+    }
+
+    bool asKw = lower.endsWith("kw");
+    bool asW = lower.endsWith("w") && !asKw;
+    bool asA = lower.endsWith("a");
+    if (!asKw && !asW && !asA && numeric > 600.0f)
+        asW = true; // Home Assistant power sensors commonly publish bare watts.
+
+    float amps = numeric;
+    if (asKw || asW) {
+        float watts = asKw ? numeric * 1000.0f : numeric;
+        float vNom = (MainsHAVoltage >= 100 && MainsHAVoltage <= 300) ? (float)MainsHAVoltage : 230.0f;
+        amps = watts / vNom;
+        amps = (float)((uint16_t)amps); // Conservative: do not exceed the configured peak.
+    }
+
+    if (amps < 1.0f || amps > 600.0f)
+        return false;
+
+    *limitA = (uint16_t)amps;
+    return true;
+}
+
 #if MQTT
 void mqtt_receive_callback(const String topic, const String payload) {
     if (topic == MQTTprefix + "/Set/Mode") {
@@ -703,8 +743,21 @@ void mqtt_receive_callback(const String topic, const String payload) {
         uint16_t RequestedCurrent = payload.toInt();
         if (RequestedCurrent == 0) {
             MaxSumMains = 0;
+            SEND_TO_CH32(MaxSumMains)
+            request_write_settings();
         } else if (RequestedCurrent == 0 || (RequestedCurrent >= 10 && RequestedCurrent <= 600)) {
-                MaxSumMains = RequestedCurrent;
+            MaxSumMains = RequestedCurrent;
+            SEND_TO_CH32(MaxSumMains)
+            request_write_settings();
+        }
+    } else if (topic == MQTTprefix + "/Set/GridImportLimit" && LoadBl < 2) {
+        uint16_t limitA = 0;
+        if (parseGridImportLimitPayload(payload, &limitA)) {
+            DynamicGridImportLimit = limitA;
+            SEND_TO_CH32(DynamicGridImportLimit)
+            _LOG_I("MQTT GridImportLimit received: %u A effective MaxSumMains=%u A (payload=%s)", DynamicGridImportLimit, getEffectiveMaxSumMains(), payload.c_str());
+        } else {
+            _LOG_I("MQTT GridImportLimit rejected: payload='%s' (use 0, amps, W, or kW; examples: 10A, 2500W, 2.5kW)", payload.c_str());
         }
     } else if (topic == MQTTprefix + "/Set/CPPWMOverride") {
         int pwm = payload.toInt();
@@ -1276,6 +1329,9 @@ void mqttPublishData() {
         MQTTclient.publish(MQTTprefix + "/Config", String(Config), true, 0);
         MQTTclient.publish(MQTTprefix + "/Lock", String(Lock), true, 0);
         MQTTclient.publish(MQTTprefix + "/CurrentMain", String(MaxMains), true, 0);
+        MQTTclient.publish(MQTTprefix + "/CurrentMaxSumMains", String(MaxSumMains), true, 0);
+        MQTTclient.publish(MQTTprefix + "/GridImportLimit", String(DynamicGridImportLimit), true, 0);
+        MQTTclient.publish(MQTTprefix + "/EffectiveGridImportLimit", String(getEffectiveMaxSumMains()), true, 0);
         MQTTclient.publish(MQTTprefix + "/CurrentMaxCircuit", String(MaxCircuit), true, 0);
         MQTTclient.publish(MQTTprefix + "/Grid", String(Grid), true, 0);
         MQTTclient.publish(MQTTprefix + "/SB2Wifi", String(SB2_WIFImode), true, 0);
@@ -1996,6 +2052,8 @@ bool handle_URI(struct mg_connection *c, struct mg_http_message *hm,  webServerR
         doc["settings"]["current_main"] = MaxMains;
         doc["settings"]["current_max_circuit"] = MaxCircuit;
         doc["settings"]["current_max_sum_mains"] = MaxSumMains;
+        doc["settings"]["dynamic_grid_import_limit"] = DynamicGridImportLimit;
+        doc["settings"]["effective_grid_import_limit"] = getEffectiveMaxSumMains();
         doc["settings"]["max_sum_mains_time"] = MaxSumMainsTime;
         doc["settings"]["solar_max_import"] = ImportCurrent;
         doc["settings"]["solar_start_current"] = StartCurrent;
@@ -2187,9 +2245,23 @@ bool handle_URI(struct mg_connection *c, struct mg_http_message *hm,  webServerR
             int current = request->getParam("current_max_sum_mains")->value().toInt();
             if((current == 0 || (current >= 10 && current <= 600)) && LoadBl < 2) {
                 MaxSumMains = current;
+                SEND_TO_CH32(MaxSumMains)
                 doc["current_max_sum_mains"] = MaxSumMains;
+                request_write_settings();
             } else {
                 doc["current_max_sum_mains"] = "Value not allowed!";
+            }
+        }
+
+        if(request->hasParam("dynamic_grid_import_limit")) {
+            uint16_t limitA = 0;
+            if(LoadBl < 2 && parseGridImportLimitPayload(request->getParam("dynamic_grid_import_limit")->value(), &limitA)) {
+                DynamicGridImportLimit = limitA;
+                SEND_TO_CH32(DynamicGridImportLimit)
+                doc["dynamic_grid_import_limit"] = DynamicGridImportLimit;
+                doc["effective_grid_import_limit"] = getEffectiveMaxSumMains();
+            } else {
+                doc["dynamic_grid_import_limit"] = "Value not allowed!";
             }
         }
 
